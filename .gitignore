@@ -1,0 +1,11 @@
+*.bin
+*.o
+
+.zig-cache
+zig-out
+
+.venv
+__pycache__
+
+vocab.txt
+
