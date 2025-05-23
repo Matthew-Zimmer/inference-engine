@@ -42,6 +42,7 @@ I am building an application which can serve low and high priority embedding tas
 36. [x] compile in the model vocab trie binary blob to the executable
 37. [x] convert trie dict to trie_root
 38. [x] implement word piece algo for the model
-35. [ ] print the token ids
-36. [ ] write the upcast u16 -> i64 cuda kernel
+39. [x] print the token ids
+40. [x] write tests for word piece algo
+41. [ ] write the upcast u16 -> i64 cuda kernel
 

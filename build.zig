@@ -27,13 +27,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const tests = b.addTest(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     publibinference.linkLibrary(libinference);
-    libinference.linkSystemLibrary("c");
+    libinference.addObjectFile(b.path("trie.o"));
+    libinference.addObjectFile(b.path("trie_root.o"));
     exe.linkLibrary(libinference);
-    exe.addObjectFile(b.path("trie.o"));
-    exe.addObjectFile(b.path("trie_root.o"));
+    tests.linkLibrary(libinference);
 
     b.installArtifact(libinference);
     b.installArtifact(publibinference);
     b.installArtifact(exe);
+
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
 }

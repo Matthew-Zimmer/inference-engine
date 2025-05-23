@@ -1,11 +1,6 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 
-extern const _binary_trie_bin_start: opaque {};
-extern const _binary_trie_root_bin_start: opaque {};
-const vocab_trie: [*]const u8 = @ptrCast(&_binary_trie_bin_start);
-const vocab_root_trie: [*]const usize = @alignCast(@ptrCast(&_binary_trie_root_bin_start));
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -23,7 +18,7 @@ pub fn main() !void {
     try std.fmt.format(writer.writer(), "{}", .{memfd});
 
     const engine: *lib.InferenceEngine = @alignCast(@ptrCast(addr));
-    engine.* = try lib.InferenceEngine.init(SIZE, vocab_root_trie, vocab_trie);
+    engine.* = try lib.InferenceEngine.init(SIZE);
     try engine.start(allocator);
     defer engine.deinit();
 

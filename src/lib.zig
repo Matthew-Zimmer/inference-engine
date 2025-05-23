@@ -1,5 +1,10 @@
 const std = @import("std");
+const expect = std.testing.expect;
 
+extern const _binary_trie_bin_start: opaque {};
+extern const _binary_trie_root_bin_start: opaque {};
+const vocab_trie: [*]const u8 = @ptrCast(&_binary_trie_bin_start);
+const vocab_root_trie: [*]const usize = @alignCast(@ptrCast(&_binary_trie_root_bin_start));
 const UNK: u16 = 101;
 
 const TrieNode = struct {
@@ -22,15 +27,58 @@ const TrieNode = struct {
             .offsets = offsets,
         };
     }
+
+    pub fn debug(self: *TrieNode) void {
+        std.debug.print("NODE (ID: {}, SIZE: {}, Values:", .{ self.id, self.size });
+        for (0..self.size) |i| {
+            std.debug.print(" {c}", .{self.values[i]});
+        }
+        std.debug.print(")\n", .{});
+    }
 };
 
+test "1 word wordpiece encode" {
+    var tokens: [64]u16 = undefined;
+    const count = wordpeice_encode(vocab_root_trie, vocab_trie, "hello", &tokens);
+
+    // this test is not fully correct
+    // should have the start and end tokens!!!
+    try expect(count == 1);
+    try std.testing.expectEqual(7592, tokens[0]);
+}
+
+test "multi word wordpiece encode" {
+    var tokens: [64]u16 = undefined;
+    const count = wordpeice_encode(vocab_root_trie, vocab_trie, "embedding request from high script", &tokens);
+
+    // this test is not fully correct
+    // should have the start and end tokens!!!
+    try expect(count == 7);
+    try std.testing.expectEqual(7861, tokens[0]);
+    try std.testing.expectEqual(8270, tokens[1]);
+    try std.testing.expectEqual(4667, tokens[2]);
+    try std.testing.expectEqual(5227, tokens[3]);
+    try std.testing.expectEqual(2013, tokens[4]);
+    try std.testing.expectEqual(2152, tokens[5]);
+    try std.testing.expectEqual(5896, tokens[6]);
+}
+
 // TODO: handle utf-8 more gracefully
+// TODO: add start and end tokens!
 fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, tokens: [*]u16) usize {
+    std.debug.print("Trying to encode \"{s}\"\n", .{text});
+
     var i: usize = 0;
     var root_offset: usize = 0;
     var token_count: usize = 0;
+    var __c: usize = 0;
     top: while (i < text.len) {
         const c = text[i];
+        // std.debug.print("TOP: {} {c}\n", .{ i, c });
+        if (__c == 24) {
+            std.debug.panic("ABORT\n", .{});
+        }
+        __c += 1;
         switch (c) {
             // skip over whitespace
             // TODO: Think does `root_offset` need to be reset back to 0 here?
@@ -38,6 +86,7 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
             // handle stuff for other characters
             else => {
                 const offset = root[c + root_offset];
+                // std.debug.print("offset: {}\n", .{offset});
                 // need to check if this logic is needed
                 // break out if root char invalid
                 if (offset == -1) {
@@ -49,6 +98,8 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                 var found_tokens: [64]u16 = undefined;
                 var found_token_idx: u8 = 1;
                 var node = TrieNode.init(&trie[offset]);
+                std.debug.print("{c} ", .{c});
+                node.debug();
                 found_tokens[0] = node.id;
                 inner: while (i + found_token_idx < text.len) {
                     const b = text[i + found_token_idx];
@@ -107,11 +158,16 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                         else => {},
                     }
 
+                    // std.debug.print("b {c}\n", .{b});
+
                     for (0..node.size) |j| {
                         if (b == node.values[j]) {
+                            node = TrieNode.init(&trie[node.offsets[j]]);
+                            std.debug.print("{c} ", .{b});
+                            node.debug();
                             found_tokens[found_token_idx] = node.id;
                             found_token_idx += 1;
-                            node = TrieNode.init(&trie[node.offsets[j]]);
+                            // std.debug.print("JUMP inner\n", .{});
                             continue :inner;
                         }
                     }
@@ -125,9 +181,10 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                         if (found_tokens[idx] != UNK) {
                             tokens[token_count] = found_tokens[idx];
                             token_count += 1;
-                            i += idx;
+                            i += idx + 1;
                             // TODO: do we need to set the ## conditionaly here?
                             root_offset = 256;
+                            std.debug.print("-----------------------\naccept Token {}, advancing by {}\n--------------------\n", .{ found_tokens[idx], idx + 1 });
                             continue :top;
                         }
                     }
@@ -140,8 +197,30 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                     i += 1;
                     // TODO: do we need to set the ## conditionaly here?
                     root_offset = 256;
+                    // std.debug.print("JUMP TOP BY no find\n", .{});
                     continue :top;
                 }
+
+                // if we are here it means that we have exhausted the full text
+                for (0..found_token_idx) |j| {
+                    const idx = found_token_idx - j - 1;
+                    if (found_tokens[idx] != UNK) {
+                        tokens[token_count] = found_tokens[idx];
+                        token_count += 1;
+                        if (j == 0) {
+                            break :top;
+                        }
+                        i += idx;
+                        // TODO: do we need to set the ## conditionaly here?
+                        root_offset = 256;
+                        continue :top;
+                    }
+                }
+
+                // no matches but we hit the end of the string
+                tokens[token_count] = UNK;
+                token_count += 1;
+                break :top;
             },
         }
     }
@@ -204,15 +283,11 @@ const InferencePipeline = struct {
 
     tokenization_queue: TokenizationQueue,
     embedding_queue: EmbeddingQueue,
-    root_trie: [*]const usize,
-    trie: [*]const u8,
 
-    pub fn init(root_trie: [*]const usize, trie: [*]const u8) InferencePipeline {
+    pub fn init() InferencePipeline {
         return .{
             .tokenization_queue = TokenizationQueue.init(),
             .embedding_queue = EmbeddingQueue.init(),
-            .root_trie = root_trie,
-            .trie = trie,
         };
     }
 
@@ -239,9 +314,11 @@ const EmbeddingRequest = struct {
     tokens: [*]u16,
 
     pub fn init(base: usize) EmbeddingRequest {
+        var padding: usize = 0;
         const size = @as(*const usize, @ptrFromInt(base)).*;
+        padding += size & 1;
         const text = @as([*]const u8, @ptrFromInt(base + @sizeOf(usize)))[0..size];
-        const tokens = @as([*]u16, @ptrFromInt(base + @sizeOf(usize) + size));
+        const tokens = @as([*]u16, @ptrFromInt(base + @sizeOf(usize) + size + padding));
 
         return .{
             .size = size,
@@ -252,10 +329,14 @@ const EmbeddingRequest = struct {
 };
 
 fn do_tokenize(pipeline: *InferencePipeline, base: usize, slot: u16, offset: usize) void {
+    std.debug.print("doing tokenization!\n", .{});
     const req = EmbeddingRequest.init(base + offset);
 
-    const token_count = wordpeice_encode(pipeline.root_trie, pipeline.trie, req.text, req.tokens);
-    _ = token_count;
+    const token_count = wordpeice_encode(vocab_root_trie, vocab_trie, req.text, req.tokens);
+    for (0..token_count) |i| {
+        std.debug.print("{} ", .{req.tokens[i]});
+    }
+    std.debug.print("\n", .{});
 
     pipeline.embedding_queue.insert(slot, offset);
 }
@@ -315,10 +396,10 @@ pub const InferenceEngine = struct {
     pool: std.Thread.Pool = undefined,
     i: usize,
 
-    pub fn init(size: usize, root_trie: [*]const usize, trie: [*]const u8) !InferenceEngine {
+    pub fn init(size: usize) !InferenceEngine {
         return .{
-            .high_priority_pipeline = InferencePipeline.init(root_trie, trie),
-            .low_priority_pipeline = InferencePipeline.init(root_trie, trie),
+            .high_priority_pipeline = InferencePipeline.init(),
+            .low_priority_pipeline = InferencePipeline.init(),
             .shared_memory = SharedMemory.init(size - 0x10000),
             .i = 0,
         };
@@ -343,7 +424,7 @@ pub const InferenceEngine = struct {
     }
 
     fn embedding_request_max_bytes(text_size: usize) usize {
-        const n = text_size + @sizeOf(usize);
+        const n = 3 * text_size + @sizeOf(usize) + 2;
         return std.mem.alignForward(usize, n, 8);
     }
 
