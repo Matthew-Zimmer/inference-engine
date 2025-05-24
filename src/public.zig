@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("lib");
 
 pub export fn enqueue_high_priority_embedding_request(eng: *lib.InferenceEngine, text: [*:0]const u8) i32 {
     return eng.enqueue_high_priority_embedding_request(std.mem.span(text)) catch -1;

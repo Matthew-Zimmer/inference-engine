@@ -4,24 +4,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const libinference = b.addStaticLibrary(.{
-        .name = "inference",
+    const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
-        .version = .{ .major = 0, .minor = 0, .patch = 0 },
     });
 
-    const publibinference = b.addSharedLibrary(.{
-        .name = "inference",
+    const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/public.zig"),
         .target = target,
         .optimize = optimize,
-        .version = .{ .major = 0, .minor = 0, .patch = 0 },
+        .pic = true,
     });
 
-    const exe = b.addExecutable(.{
-        .name = "inference-engine",
+    const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -33,14 +29,28 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    publibinference.linkLibrary(libinference);
-    libinference.addObjectFile(b.path("trie.o"));
-    libinference.addObjectFile(b.path("trie_root.o"));
-    exe.linkLibrary(libinference);
-    tests.linkLibrary(libinference);
+    // link cuda + tensor RT to
+    // lib inference
 
-    b.installArtifact(libinference);
-    b.installArtifact(publibinference);
+    lib_mod.addObjectFile(b.path("trie.o"));
+    lib_mod.addObjectFile(b.path("trie_root.o"));
+    lib_mod.addLibraryPath(b.path("deps/TensorRT-10.10.0.31/lib"));
+    lib_mod.addLibraryPath(b.path("deps/cuda_cudart/lib64"));
+    lib_mod.linkSystemLibrary("nvinfer", .{});
+    lib_mod.linkSystemLibrary("cudart", .{});
+
+    exe_mod.addImport("lib", lib_mod);
+
+    runtime_mod.addImport("lib", lib_mod);
+
+    const version: std.SemanticVersion = .{ .major = 0, .minor = 0, .patch = 0 };
+
+    const exe = b.addExecutable(.{ .name = "inference-engine", .root_module = exe_mod, .version = version });
+    const runtime = b.addLibrary(.{ .name = "inference-engine-runtime", .root_module = runtime_mod, .linkage = .dynamic, .version = version });
+
+    exe.linkLibC();
+
+    b.installArtifact(runtime);
     b.installArtifact(exe);
 
     const test_step = b.step("test", "Run unit tests");

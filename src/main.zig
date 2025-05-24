@@ -1,10 +1,36 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("lib");
+
+var running = true;
+
+fn handler(sig: c_int) callconv(.C) void {
+    std.debug.print("GOT signal! stopping {}\n", .{sig});
+    running = false;
+}
 
 pub fn main() !void {
+    const sa = std.os.linux.Sigaction{
+        .handler = .{ .handler = handler },
+        .mask = std.mem.zeroes(std.os.linux.sigset_t),
+        .flags = 0,
+    };
+
+    _ = std.os.linux.sigaction(std.os.linux.SIG.INT, &sa, null);
+    _ = std.os.linux.sigaction(std.os.linux.SIG.TERM, &sa, null);
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    std.debug.print("Doing cuda malloc!\n", .{});
+    var ptr: *anyopaque = undefined;
+    std.debug.print("ptr: {x}\n", .{ptr});
+    const mallocError = lib.cudaMalloc(&ptr, 1024 * 1024);
+    std.debug.print("did cuda malloc\n", .{});
+    std.debug.print("malloc error code: {} ptr: {x}\n", .{ mallocError, ptr });
+    const freeError = lib.cudaFree(ptr);
+    std.debug.print("free error code: {}\n", .{freeError});
+    std.debug.print("done cuda malloc!\n", .{});
 
     const SIZE = 4096 * 100;
     const memfd = lib.create_memory_fd(SIZE);
@@ -51,7 +77,7 @@ pub fn main() !void {
         return error.os_fork_error;
     }
 
-    while (true) {
+    while (running) {
         try engine.tick();
     }
 }

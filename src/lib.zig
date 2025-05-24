@@ -495,3 +495,129 @@ pub fn map_and_lock_fd(fd: i32, size: usize) [*]u8 {
 pub fn unlock_and_unmap_fd(addr: [*]const u8, size: usize) void {
     _ = std.os.linux.munmap(addr, size);
 }
+
+// cuda and custom kernel functions and wrappers
+pub extern fn cudaMalloc(ptr: **anyopaque, size: usize) c_int;
+pub extern fn cudaFree(data: *anyopaque) callconv(.C) u32;
+pub extern fn cudaMemcpyAsync(dst: *anyopaque, src: *const anyopaque, size: usize, kind: c_int) void;
+pub extern fn cudaHostRegister(ptr: *anyopaque, size: usize, flags: u32) void;
+pub extern fn cudaHostUnregister(ptr: *anyopaque) void;
+pub extern fn cudaDeviceSynchronize() void;
+
+const CudaStreamHandle = *anyopaque;
+extern fn cudaStreamCreate(stream: *CudaStreamHandle) void;
+extern fn cudaStreamDestroy(stream: *CudaStreamHandle) void;
+extern fn cudaStreamSynchronize(stream: CudaStreamHandle) void;
+pub const CudaStream = struct {
+    handle: CudaStreamHandle,
+
+    pub fn init() CudaStream {
+        const handle: CudaStreamHandle = undefined;
+        cudaStreamCreate(&handle);
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: *CudaStream) void {
+        cudaStreamDestroy(self.handle);
+    }
+
+    pub fn sync(self: *CudaStream) void {
+        cudaStreamSynchronize(self.handle);
+    }
+
+    pub fn record(self: *CudaStream, event: *CudaEvent) void {
+        cudaEventRecord(event.handle, self.handle);
+    }
+};
+
+const CudaEventHandle = *anyopaque;
+extern fn cudaEventCreate(event: **anyopaque) void;
+extern fn cudaEventRecord(event: *anyopaque, stream: CudaStreamHandle) void;
+extern fn cudaEventSynchronize(event: *anyopaque) void;
+pub const CudaEvent = struct {
+    handle: CudaEventHandle,
+
+    pub fn init() CudaEvent {
+        const handle: CudaEventHandle = undefined;
+        cudaEventCreate(&handle);
+    }
+
+    pub fn sync(self: *CudaEvent) void {
+        cudaEventSynchronize(self.handle);
+    }
+};
+
+// tensorRT functions
+const TensorRTRuntimeHandle = *anyopaque;
+extern fn create_runtime() *anyopaque;
+extern fn destroy_runtime(tr: *anyopaque) void;
+pub const TensorRTRuntime = struct {
+    handle: TensorRTRuntimeHandle,
+
+    pub fn init() TensorRTRuntime {
+        const handle: TensorRTRuntimeHandle = create_runtime();
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: *TensorRTRuntime) void {
+        destroy_runtime(self.handle);
+    }
+};
+
+const TensorRTEngineHandle = *anyopaque;
+extern fn create_engine() *TensorRTEngineHandle;
+extern fn destory_engine(eng: *TensorRTEngineHandle) void;
+extern fn engine_get_device_memory_size(eng: *TensorRTEngineHandle) i64;
+pub const TensorRTEngine = struct {
+    handle: TensorRTEngineHandle,
+
+    pub fn init(rt: *TensorRTRuntime) TensorRTEngine {
+        return .{ .handle = create_engine(rt.handle) };
+    }
+
+    pub fn deinit(self: *TensorRTEngine) void {
+        destory_engine(self.handle);
+    }
+
+    pub fn get_device_memory_size(self: *TensorRTEngine) i64 {
+        return engine_get_device_memory_size(self.handle);
+    }
+};
+
+const TensorRTExecutionContextHandle = *anyopaque;
+extern fn create_execution_context(eng: TensorRTEngineHandle) TensorRTExecutionContextHandle;
+extern fn destroy_execution_context(ctx: TensorRTExecutionContextHandle) void;
+extern fn execution_context_set_tensor_shape(ctx: TensorRTExecutionContextHandle, batch: i32, size: i32) void;
+extern fn execution_context_set_device_memory(ctx: TensorRTExecutionContextHandle, ptr: *anyopaque) void;
+extern fn execution_context_set_tensor_address(ctx: TensorRTExecutionContextHandle, name: [*c]u8, ptr: *anyopaque) void;
+extern fn execution_context_enqueue(ctx: TensorRTExecutionContextHandle, stream: CudaStreamHandle) void;
+pub const TensorRTExecutionContext = struct {
+    handle: TensorRTExecutionContextHandle,
+
+    pub fn init(eng: *TensorRTEngine) TensorRTExecutionContext {
+        return .{ .handle = create_execution_context(eng.handler) };
+    }
+
+    pub fn deinit(self: *TensorRTExecutionContext) void {
+        destory_engine(self.handle);
+    }
+
+    pub fn set_tensor_shape(self: *TensorRTExecutionContext, batch: i32, size: i32) void {
+        execution_context_set_tensor_shape(self.handle, batch, size);
+    }
+
+    pub fn set_device_memory(self: *TensorRTExecutionContext, ptr: *anyopaque) void {
+        execution_context_set_device_memory(self.handle, ptr);
+    }
+
+    pub fn set_tensor_address(self: *TensorRTExecutionContext, name: [*c]u8, ptr: *anyopaque) void {
+        execution_context_set_tensor_address(self.handle, name, ptr);
+    }
+
+    pub fn enqueue(self: *TensorRTExecutionContext, stream: CudaStream) void {
+        execution_context_enqueue(self.handle, stream.handle);
+    }
+};
+
+// custom kernels
+pub extern fn upcast_uint16_to_int64() void;

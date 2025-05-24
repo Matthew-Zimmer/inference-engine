@@ -45,4 +45,15 @@ I am building an application which can serve low and high priority embedding tas
 39. [x] print the token ids
 40. [x] write tests for word piece algo
 41. [ ] write the upcast u16 -> i64 cuda kernel
+42. [x] wrap cuda kernel in C linkage
+43. [x] wrap tensorRT functions in C linkage
+44. [x] delcare cuda kernel function in zig
+45. [x] delcare tensorRT functions in zig
+46. [x] allocate memory on gpu and deallocate it
+47. [ ] allocate the tensor pool on the gpu
+48. [ ] initialize the cuda streams
+49. [ ] initialize the execution contexts
+50. [x] add a sig term + sig int handler to gracefully shutdown
+51. [x] convert static library to zig module
+
 
