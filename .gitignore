@@ -11,3 +11,6 @@ __pycache__
 
 vocab.txt
 
+model_prep/onnx
+model.engine
+

@@ -1,9 +1,7 @@
-#include <vector>
-#include <fstream>
-#include <iostream>
 #include <NvInferRuntime.h>
 #include <cuda_runtime_api.h>
-
+#include <stdio.h>
+#include <stdlib.h>
 
 __global__ void upcast_uint16_to_int64_kernel() {
 
@@ -16,20 +14,31 @@ extern "C" void upcast_uint16_to_int64(cudaStream_t stream) {
 
 class MyLogger : public nvinfer1::ILogger {
         void log(nvinfer1::ILogger::Severity severity, nvinfer1::AsciiChar const* msg) noexcept override {
-                std::cout << msg << std::endl;
-        }
+		printf("%s\n", msg);
+	}
 } logger;
 
-std::vector<char> read_engine_file(char* engine_file) {
-    std::ifstream file(engine_file, std::ios::binary);
+struct EngineInfo {
+	unsigned char* data;
+	size_t size;
+};
 
-    file.seekg(0, file.end);
-    size_t size = file.tellg();
-    file.seekg(0, file.beg);
+// TODO: handle error more gracefully
+EngineInfo read_engine_file(char* engine_file) {
+    FILE* file = fopen(engine_file, "rb");
 
-    std::vector<char> buffer(size);
-    file.read(buffer.data(), size);
-    return buffer;
+    fseek(file, 0, SEEK_END);
+    size_t size = ftell(file);
+    rewind(file);
+
+    unsigned char* data = (unsigned char*)malloc(size);
+    fread(data, 1, size, file);
+
+    fclose(file);
+    EngineInfo info;
+    info.data = data;
+    info.size = size;
+    return info;
 }
 
 extern "C" nvinfer1::IRuntime* create_runtime() {
@@ -41,8 +50,10 @@ extern "C" void destroy_runtime(nvinfer1::IRuntime* rt) {
 }
 
 extern "C" nvinfer1::ICudaEngine* create_engine(nvinfer1::IRuntime* rt, char* path) {
-	auto vec = read_engine_file(path);
-	return rt->deserializeCudaEngine(vec.data(), vec.size());
+	EngineInfo info = read_engine_file(path);
+	nvinfer1::ICudaEngine* eng = rt->deserializeCudaEngine(info.data, info.size);
+	free(info.data);
+	return eng;
 }
 
 extern "C" void destroy_engine(nvinfer1::ICudaEngine* eng) {
@@ -53,7 +64,7 @@ extern "C" nvinfer1::IExecutionContext* create_execution_context(nvinfer1::ICuda
 	return eng->createExecutionContext();
 }
 
-extern "C" void destory_execution_context(nvinfer1::IExecutionContext* ctx) {
+extern "C" void destroy_execution_context(nvinfer1::IExecutionContext* ctx) {
 	delete ctx;
 }
 

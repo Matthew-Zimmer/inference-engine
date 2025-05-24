@@ -22,16 +22,6 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    std.debug.print("Doing cuda malloc!\n", .{});
-    var ptr: *anyopaque = undefined;
-    std.debug.print("ptr: {x}\n", .{ptr});
-    const mallocError = lib.cudaMalloc(&ptr, 1024 * 1024);
-    std.debug.print("did cuda malloc\n", .{});
-    std.debug.print("malloc error code: {} ptr: {x}\n", .{ mallocError, ptr });
-    const freeError = lib.cudaFree(ptr);
-    std.debug.print("free error code: {}\n", .{freeError});
-    std.debug.print("done cuda malloc!\n", .{});
-
     const SIZE = 4096 * 100;
     const memfd = lib.create_memory_fd(SIZE);
     defer lib.close_memory_fd(memfd);

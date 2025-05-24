@@ -390,11 +390,21 @@ const SharedMemory = struct {
 };
 
 pub const InferenceEngine = struct {
+    const GPU_MODELS = 1;
+
     shared_memory: SharedMemory,
     high_priority_pipeline: InferencePipeline,
     low_priority_pipeline: InferencePipeline,
-    pool: std.Thread.Pool = undefined,
     i: usize,
+
+    // threading resources
+    pool: std.Thread.Pool = undefined,
+
+    // gpu resources
+    model_runtime: TensorRTRuntime = undefined,
+    model: TensorRTEngine = undefined,
+    streams: [GPU_MODELS]CudaStream = undefined,
+    execution_contexts: [GPU_MODELS]TensorRTExecutionContext = undefined,
 
     pub fn init(size: usize) !InferenceEngine {
         return .{
@@ -407,10 +417,22 @@ pub const InferenceEngine = struct {
 
     pub fn start(self: *InferenceEngine, allocator: std.mem.Allocator) !void {
         try self.pool.init(.{ .allocator = allocator, .n_jobs = 4 });
+        self.model_runtime = TensorRTRuntime.init();
+        self.model = TensorRTEngine.init(&self.model_runtime);
+        for (0..GPU_MODELS) |i| {
+            self.streams[i] = CudaStream.init();
+            self.execution_contexts[i] = TensorRTExecutionContext.init(&self.model);
+        }
     }
 
     pub fn deinit(self: *InferenceEngine) void {
-        defer self.pool.deinit();
+        self.pool.deinit();
+        for (0..GPU_MODELS) |i| {
+            self.streams[i].deinit();
+            self.execution_contexts[i].deinit();
+        }
+        self.model.deinit();
+        self.model_runtime.deinit();
     }
 
     pub fn tick(self: *InferenceEngine) !void {
@@ -505,20 +527,22 @@ pub extern fn cudaHostUnregister(ptr: *anyopaque) void;
 pub extern fn cudaDeviceSynchronize() void;
 
 const CudaStreamHandle = *anyopaque;
-extern fn cudaStreamCreate(stream: *CudaStreamHandle) void;
-extern fn cudaStreamDestroy(stream: *CudaStreamHandle) void;
+extern fn cudaStreamCreate(stream: *CudaStreamHandle) c_int;
+extern fn cudaStreamDestroy(stream: CudaStreamHandle) c_int;
 extern fn cudaStreamSynchronize(stream: CudaStreamHandle) void;
 pub const CudaStream = struct {
     handle: CudaStreamHandle,
 
     pub fn init() CudaStream {
-        const handle: CudaStreamHandle = undefined;
-        cudaStreamCreate(&handle);
+        var handle: CudaStreamHandle = undefined;
+        const err = cudaStreamCreate(&handle);
+        std.debug.print("Cuda stream create Error: {}\n", .{err});
         return .{ .handle = handle };
     }
 
     pub fn deinit(self: *CudaStream) void {
-        cudaStreamDestroy(self.handle);
+        const err = cudaStreamDestroy(self.handle);
+        std.debug.print("Cuda stream destroy error: {}\n", .{err});
     }
 
     pub fn sync(self: *CudaStream) void {
@@ -550,7 +574,7 @@ pub const CudaEvent = struct {
 // tensorRT functions
 const TensorRTRuntimeHandle = *anyopaque;
 extern fn create_runtime() *anyopaque;
-extern fn destroy_runtime(tr: *anyopaque) void;
+extern fn destroy_runtime(rt: *anyopaque) void;
 pub const TensorRTRuntime = struct {
     handle: TensorRTRuntimeHandle,
 
@@ -565,9 +589,9 @@ pub const TensorRTRuntime = struct {
 };
 
 const TensorRTEngineHandle = *anyopaque;
-extern fn create_engine() *TensorRTEngineHandle;
-extern fn destory_engine(eng: *TensorRTEngineHandle) void;
-extern fn engine_get_device_memory_size(eng: *TensorRTEngineHandle) i64;
+extern fn create_engine(rt: TensorRTRuntimeHandle) TensorRTEngineHandle;
+extern fn destroy_engine(eng: TensorRTEngineHandle) void;
+extern fn engine_get_device_memory_size(eng: TensorRTEngineHandle) i64;
 pub const TensorRTEngine = struct {
     handle: TensorRTEngineHandle,
 
@@ -576,7 +600,7 @@ pub const TensorRTEngine = struct {
     }
 
     pub fn deinit(self: *TensorRTEngine) void {
-        destory_engine(self.handle);
+        destroy_engine(self.handle);
     }
 
     pub fn get_device_memory_size(self: *TensorRTEngine) i64 {
@@ -595,11 +619,11 @@ pub const TensorRTExecutionContext = struct {
     handle: TensorRTExecutionContextHandle,
 
     pub fn init(eng: *TensorRTEngine) TensorRTExecutionContext {
-        return .{ .handle = create_execution_context(eng.handler) };
+        return .{ .handle = create_execution_context(eng.handle) };
     }
 
     pub fn deinit(self: *TensorRTExecutionContext) void {
-        destory_engine(self.handle);
+        destroy_execution_context(self.handle);
     }
 
     pub fn set_tensor_shape(self: *TensorRTExecutionContext, batch: i32, size: i32) void {

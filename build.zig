@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
 
     lib_mod.addObjectFile(b.path("trie.o"));
     lib_mod.addObjectFile(b.path("trie_root.o"));
+    lib_mod.addObjectFile(b.path("gpu.o"));
     lib_mod.addLibraryPath(b.path("deps/TensorRT-10.10.0.31/lib"));
     lib_mod.addLibraryPath(b.path("deps/cuda_cudart/lib64"));
     lib_mod.linkSystemLibrary("nvinfer", .{});
@@ -49,10 +50,22 @@ pub fn build(b: *std.Build) void {
     const runtime = b.addLibrary(.{ .name = "inference-engine-runtime", .root_module = runtime_mod, .linkage = .dynamic, .version = version });
 
     exe.linkLibC();
+    exe.linkLibCpp();
 
     b.installArtifact(runtime);
     b.installArtifact(exe);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    const run_cmd = b.addRunArtifact(exe);
+
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
 }
