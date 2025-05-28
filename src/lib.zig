@@ -391,6 +391,13 @@ const SharedMemory = struct {
 
 pub const InferenceEngine = struct {
     const GPU_MODELS = 1;
+    const MAX_SEQUENCE_SIZE = 2048;
+    const EMBEDDING_DIMENSION = 768;
+    const MAX_BATCH_SIZE = 1;
+    const MAX_INPUT_ID_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u64);
+    const MAX_ATTENTION_MASK_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u64);
+    const MAX_TOKEN_EMBEDDING_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * EMBEDDING_DIMENSION * @sizeOf(f32);
+    const TENSOR_MEMORY_BYTES = MAX_ATTENTION_MASK_BYTES + GPU_MODELS * (MAX_INPUT_ID_BYTES + MAX_TOKEN_EMBEDDING_BYTES);
 
     shared_memory: SharedMemory,
     high_priority_pipeline: InferencePipeline,
@@ -405,6 +412,9 @@ pub const InferenceEngine = struct {
     model: TensorRTEngine = undefined,
     streams: [GPU_MODELS]CudaStream = undefined,
     execution_contexts: [GPU_MODELS]TensorRTExecutionContext = undefined,
+    tensor_attention_mask: *anyopaque = undefined,
+    tensor_input_ids: [GPU_MODELS]*anyopaque = undefined,
+    tensor_token_embeddings: [GPU_MODELS]*anyopaque = undefined,
 
     pub fn init(size: usize) !InferenceEngine {
         return .{
@@ -417,11 +427,20 @@ pub const InferenceEngine = struct {
 
     pub fn start(self: *InferenceEngine, allocator: std.mem.Allocator) !void {
         try self.pool.init(.{ .allocator = allocator, .n_jobs = 4 });
+        var gpu_memory: *anyopaque = undefined;
+        _ = cudaMalloc(&gpu_memory, TENSOR_MEMORY_BYTES);
+        var offset: usize = MAX_ATTENTION_MASK_BYTES;
+
         self.model_runtime = TensorRTRuntime.init();
         self.model = TensorRTEngine.init(&self.model_runtime);
+        self.tensor_attention_mask = gpu_memory;
         for (0..GPU_MODELS) |i| {
             self.streams[i] = CudaStream.init();
             self.execution_contexts[i] = TensorRTExecutionContext.init(&self.model);
+            self.tensor_input_ids[i] = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            offset += MAX_INPUT_ID_BYTES;
+            self.tensor_token_embeddings[i] = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            offset += MAX_TOKEN_EMBEDDING_BYTES;
         }
     }
 
@@ -433,6 +452,8 @@ pub const InferenceEngine = struct {
         }
         self.model.deinit();
         self.model_runtime.deinit();
+
+        _ = cudaFree(self.tensor_attention_mask);
     }
 
     pub fn tick(self: *InferenceEngine) !void {
@@ -589,14 +610,14 @@ pub const TensorRTRuntime = struct {
 };
 
 const TensorRTEngineHandle = *anyopaque;
-extern fn create_engine(rt: TensorRTRuntimeHandle) TensorRTEngineHandle;
+extern fn create_engine(rt: TensorRTRuntimeHandle, path: [*:0]const u8) TensorRTEngineHandle;
 extern fn destroy_engine(eng: TensorRTEngineHandle) void;
 extern fn engine_get_device_memory_size(eng: TensorRTEngineHandle) i64;
 pub const TensorRTEngine = struct {
     handle: TensorRTEngineHandle,
 
     pub fn init(rt: *TensorRTRuntime) TensorRTEngine {
-        return .{ .handle = create_engine(rt.handle) };
+        return .{ .handle = create_engine(rt.handle, "model.engine") };
     }
 
     pub fn deinit(self: *TensorRTEngine) void {

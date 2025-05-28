@@ -52,6 +52,8 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     exe.linkLibCpp();
 
+    runtime.linkLibC();
+
     b.installArtifact(runtime);
     b.installArtifact(exe);
 

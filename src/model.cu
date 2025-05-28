@@ -51,7 +51,9 @@ extern "C" void destroy_runtime(nvinfer1::IRuntime* rt) {
 
 extern "C" nvinfer1::ICudaEngine* create_engine(nvinfer1::IRuntime* rt, char* path) {
 	EngineInfo info = read_engine_file(path);
+	printf("read engine info\n");
 	nvinfer1::ICudaEngine* eng = rt->deserializeCudaEngine(info.data, info.size);
+	printf("made engine\n");
 	free(info.data);
 	return eng;
 }

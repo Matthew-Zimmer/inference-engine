@@ -50,11 +50,12 @@ I am building an application which can serve low and high priority embedding tas
 44. [x] delcare cuda kernel function in zig
 45. [x] delcare tensorRT functions in zig
 46. [x] allocate memory on gpu and deallocate it
-47. [ ] allocate the tensor pool on the gpu
+47. [x] allocate the tensor pool on the gpu
 48. [x] initialize the cuda streams
 49. [x] initialize the execution contexts
 50. [x] add a sig term + sig int handler to gracefully shutdown
 51. [x] convert static library to zig module
 52. [x] prepare the pytensor to onnx format
 53. [x] prepare the onnx format to .engine format
+54. [ ] enqueue the embeding portion to the pipeline
 
