@@ -65,44 +65,34 @@ test "multi word wordpiece encode" {
 
 // TODO: handle utf-8 more gracefully
 // TODO: add start and end tokens!
-fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, tokens: [*]u16) usize {
-    std.debug.print("Trying to encode \"{s}\"\n", .{text});
-
+fn wordpeice_encode(req: EmbeddingRequestView) void {
+    std.debug.print("Generating token ids for '{s}'\n", .{req.text[0..req.size.*]});
     var i: usize = 0;
     var root_offset: usize = 0;
     var token_count: usize = 0;
-    var __c: usize = 0;
-    top: while (i < text.len) {
-        const c = text[i];
-        // std.debug.print("TOP: {} {c}\n", .{ i, c });
-        if (__c == 24) {
-            std.debug.panic("ABORT\n", .{});
-        }
-        __c += 1;
+    top: while (i < req.size.*) {
+        const c = req.text[i];
         switch (c) {
             // skip over whitespace
             // TODO: Think does `root_offset` need to be reset back to 0 here?
             ' ', '\t', '\n', '\r' => i += 1,
             // handle stuff for other characters
             else => {
-                const offset = root[c + root_offset];
-                // std.debug.print("offset: {}\n", .{offset});
+                const offset = vocab_root_trie[c + root_offset];
                 // need to check if this logic is needed
                 // break out if root char invalid
                 if (offset == -1) {
-                    tokens[token_count] = UNK;
+                    req.tokens[token_count] = UNK;
                     token_count += 1;
                     i += 1;
                     continue;
                 }
                 var found_tokens: [64]u16 = undefined;
                 var found_token_idx: u8 = 1;
-                var node = TrieNode.init(&trie[offset]);
-                std.debug.print("{c} ", .{c});
-                node.debug();
+                var node = TrieNode.init(&vocab_trie[offset]);
                 found_tokens[0] = node.id;
-                inner: while (i + found_token_idx < text.len) {
-                    const b = text[i + found_token_idx];
+                inner: while (i + found_token_idx < req.size.*) {
+                    const b = req.text[i + found_token_idx];
 
                     // TODO: we also need to handle whitespace
                     // that should start a new word!!!!
@@ -118,7 +108,7 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                             for (0..found_token_idx) |j| {
                                 const idx = found_token_idx - j - 1;
                                 if (found_tokens[idx] != UNK) {
-                                    tokens[token_count] = found_tokens[idx];
+                                    req.tokens[token_count] = found_tokens[idx];
                                     token_count += 1;
 
                                     // this case means we had a valid word then a whitespace
@@ -139,7 +129,7 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                             // only happens if all found tokens are UNK
                             // advance i by 1 or 2 depending on if found tokens is 1
                             // conditionally set root_offset
-                            tokens[token_count] = UNK;
+                            req.tokens[token_count] = UNK;
                             token_count += 1;
                             // only 1 char then whitespace
                             // we can advance 2 (unknown char + the space)
@@ -158,16 +148,11 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                         else => {},
                     }
 
-                    // std.debug.print("b {c}\n", .{b});
-
                     for (0..node.size) |j| {
                         if (b == node.values[j]) {
-                            node = TrieNode.init(&trie[node.offsets[j]]);
-                            std.debug.print("{c} ", .{b});
-                            node.debug();
+                            node = TrieNode.init(&vocab_trie[node.offsets[j]]);
                             found_tokens[found_token_idx] = node.id;
                             found_token_idx += 1;
-                            // std.debug.print("JUMP inner\n", .{});
                             continue :inner;
                         }
                     }
@@ -179,12 +164,11 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                     for (0..found_token_idx) |j| {
                         const idx = found_token_idx - j - 1;
                         if (found_tokens[idx] != UNK) {
-                            tokens[token_count] = found_tokens[idx];
+                            req.tokens[token_count] = found_tokens[idx];
                             token_count += 1;
                             i += idx + 1;
                             // TODO: do we need to set the ## conditionaly here?
                             root_offset = 256;
-                            std.debug.print("-----------------------\naccept Token {}, advancing by {}\n--------------------\n", .{ found_tokens[idx], idx + 1 });
                             continue :top;
                         }
                     }
@@ -192,12 +176,11 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                     // will only be here if all found tokens are UNK
                     // only advance "i" by 1 and retry from the start
                     // with a "##" prefix as root
-                    tokens[token_count] = UNK;
+                    req.tokens[token_count] = UNK;
                     token_count += 1;
                     i += 1;
                     // TODO: do we need to set the ## conditionaly here?
                     root_offset = 256;
-                    // std.debug.print("JUMP TOP BY no find\n", .{});
                     continue :top;
                 }
 
@@ -205,7 +188,7 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                 for (0..found_token_idx) |j| {
                     const idx = found_token_idx - j - 1;
                     if (found_tokens[idx] != UNK) {
-                        tokens[token_count] = found_tokens[idx];
+                        req.tokens[token_count] = found_tokens[idx];
                         token_count += 1;
                         if (j == 0) {
                             break :top;
@@ -218,21 +201,33 @@ fn wordpeice_encode(root: [*]const usize, trie: [*]const u8, text: []const u8, t
                 }
 
                 // no matches but we hit the end of the string
-                tokens[token_count] = UNK;
+                req.tokens[token_count] = UNK;
                 token_count += 1;
                 break :top;
             },
         }
     }
 
-    return token_count;
+    std.debug.print("Encoded tokens: ", .{});
+    for (0..token_count) |a| {
+        std.debug.print("{} ", .{req.tokens[a]});
+    }
+    std.debug.print("\n", .{});
+
+    req.is_done_tokenizing.* = true;
+    req.tokens_count.* = 1; // really token chunk count
+    req.pipeline().embedding_queue.push(.{ .offset = req.offset.*, .index = 0, .size = token_count, .batch = 1 }) catch {
+        std.debug.print("FAILED TO enqueue embedding work\n", .{});
+    };
 }
 
 fn RingQueue(comptime T: type, comptime N: u16) type {
+    const M = N + 1;
+
     return struct {
         const Self = @This();
 
-        buffer: [N]T,
+        buffer: [M]T,
         head: u16,
         tail: u16,
 
@@ -245,7 +240,7 @@ fn RingQueue(comptime T: type, comptime N: u16) type {
         }
 
         pub fn is_full(self: *Self) bool {
-            return self.head == (self.tail + 1) % N;
+            return self.head == (self.tail + 1) % M;
         }
 
         pub fn peek(self: *Self) ?T {
@@ -256,7 +251,7 @@ fn RingQueue(comptime T: type, comptime N: u16) type {
         pub fn reserve(self: *Self) !u16 {
             if (self.is_full()) return error.full;
             const idx = self.tail;
-            self.tail = (self.tail + 1) % N;
+            self.tail = (self.tail + 1) % M;
             return idx;
         }
 
@@ -266,21 +261,47 @@ fn RingQueue(comptime T: type, comptime N: u16) type {
 
         pub fn discard(self: *Self) !void {
             if (self.is_empty()) return error.empty;
-            self.head = (self.head + 1) % N;
+            self.head = (self.head + 1) % M;
         }
 
         pub fn push(self: *Self, val: T) !void {
             if (self.is_full()) return error.full;
             self.buffer[self.tail] = val;
-            self.tail = (self.tail + 1) % N;
+            self.tail = (self.tail + 1) % M;
+        }
+
+        pub fn pop(self: *Self) !T {
+            if (self.is_empty()) return error.empty;
+            const val = self.buffer[self.head];
+            self.head = (self.head + 1) % M;
+            return val;
         }
     };
 }
 
-const InferencePipeline = struct {
-    const TokenizationQueue = RingQueue(usize, 128);
-    const EmbeddingQueue = RingQueue(usize, 1024);
+const GpuDevice = struct {
+    stream: CudaStream,
+    execution_context: TensorRTExecutionContext,
+    input_ids_tensor: *anyopaque,
+    attention_mask_tensor: *anyopaque,
+    token_embeddings_tensor: *anyopaque,
 
+    pub fn deinit(self: *GpuDevice) void {
+        self.stream.deinit();
+        self.execution_context.deinit();
+    }
+};
+
+const TokenizationQueue = RingQueue(usize, 128);
+const EmbeddingQueueItem = struct {
+    offset: usize,
+    index: usize,
+    batch: usize,
+    size: usize,
+};
+const EmbeddingQueue = RingQueue(EmbeddingQueueItem, 1024);
+
+const InferencePipeline = struct {
     tokenization_queue: TokenizationQueue,
     embedding_queue: EmbeddingQueue,
 
@@ -292,54 +313,130 @@ const InferencePipeline = struct {
     }
 
     pub fn enqueue(self: *InferencePipeline, offset: usize) !void {
-        std.debug.print("Pushed to tokenization queue\n", .{});
-        return try self.tokenization_queue.push(offset);
+        try self.tokenization_queue.push(offset);
     }
 
-    pub fn tokenize(self: *InferencePipeline, base: usize, pool: *std.Thread.Pool) !bool {
-        const offset = self.tokenization_queue.peek() orelse return false;
-        const slot = self.embedding_queue.reserve() catch return false;
-        self.tokenization_queue.discard() catch unreachable;
-        std.debug.print("tokenization ready {} {}\n", .{ slot, offset });
-        pool.spawn(do_tokenize, .{ self, base, slot, offset }) catch |e| {
+    pub fn tokenize(self: *InferencePipeline, base: usize, pool: *std.Thread.Pool) !void {
+        const offset = try self.tokenization_queue.pop();
+        pool.spawn(wordpeice_encode, .{EmbeddingRequestView.init(base + offset)}) catch |e| {
             std.debug.print("POOL SPAWN ERROR: {}\n", .{e});
         };
-        return true;
+    }
+
+    pub fn embed(self: *InferencePipeline, base: usize, device: *GpuDevice) !void {
+        const item = try self.embedding_queue.pop();
+        const ptr = base + item.offset;
+        const req = EmbeddingRequestView.init(ptr);
+
+        //var floats: [768]f32 = undefined;
+        cudaMemcpyAsync(device.input_ids_tensor, req.tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
+        device.execution_context.set_tensor_shape(@intCast(item.batch), @intCast(item.size));
+        device.execution_context.set_tensor_address("input_ids", device.input_ids_tensor);
+        device.execution_context.set_tensor_address("attention_mask", device.attention_mask_tensor); // TODO: this may or may not be needed
+        device.execution_context.set_tensor_address("token_embeddings", device.token_embeddings_tensor);
+        device.execution_context.enqueue(device.stream);
+        cudaMemcpyAsync(req.embeddings, device.token_embeddings_tensor, item.batch * item.size * 768 * @sizeOf(f32), .d2h, device.stream.handle);
+        _ = cudaLaunchHostFunc(device.stream.handle, cuda_embedding_callback, @ptrFromInt(ptr));
     }
 };
 
-const EmbeddingRequest = struct {
-    size: usize,
-    text: []const u8,
-    tokens: [*]u16,
+export fn cuda_embedding_callback(data: ?*anyopaque) callconv(.C) void {
+    const req = EmbeddingRequestView.init(@intFromPtr(data));
+    for (0..10) |i| std.debug.print("{} ", .{req.embeddings[i]});
+    std.debug.print("\n", .{});
+}
 
-    pub fn init(base: usize) EmbeddingRequest {
-        var padding: usize = 0;
-        const size = @as(*const usize, @ptrFromInt(base)).*;
-        padding += size & 1;
-        const text = @as([*]const u8, @ptrFromInt(base + @sizeOf(usize)))[0..size];
-        const tokens = @as([*]u16, @ptrFromInt(base + @sizeOf(usize) + size + padding));
+const EmbeddingRequestView = struct {
+    size: *usize,
+    offset: *usize,
+    pipeline_offset: *usize,
+    tokens_count: *usize,
+    embeddings_count: *usize,
+    is_done_tokenizing: *bool,
+
+    text: [*]u8,
+    tokens: [*]u64,
+    embeddings: [*]f32,
+
+    fn ptr(comptime T: type, val: usize) T {
+        return @as(T, @ptrFromInt(val));
+    }
+
+    fn field_offsets(text_size: usize) [10]usize {
+        var offsets: [10]usize = undefined;
+        var cum: usize = 0;
+
+        offsets[0] = 0;
+        cum += @sizeOf(usize);
+
+        offsets[1] = cum;
+        cum += @sizeOf(usize);
+
+        offsets[2] = cum;
+        cum += @sizeOf(usize);
+
+        offsets[3] = cum;
+        cum += @sizeOf(usize);
+
+        offsets[4] = cum;
+        cum += @sizeOf(usize);
+
+        offsets[5] = cum;
+        cum += @sizeOf(bool);
+
+        offsets[6] = cum;
+        cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u64));
+
+        offsets[7] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(f32));
+
+        offsets[8] = cum;
+        // this is a very conservative estimate of embedding space
+        // TODO: improve this estimate once chunking strategies are implemented
+        cum = std.mem.alignForward(usize, cum + 768 * text_size * @sizeOf(f32), 8);
+
+        offsets[9] = cum;
+
+        return offsets;
+    }
+
+    pub fn init(base: usize) EmbeddingRequestView {
+        const size = @as(*usize, @ptrFromInt(base)).*;
+        const offsets = EmbeddingRequestView.field_offsets(size);
 
         return .{
-            .size = size,
-            .text = text,
-            .tokens = tokens,
+            .size = ptr(*usize, base + offsets[0]),
+            .offset = ptr(*usize, base + offsets[1]),
+            .pipeline_offset = ptr(*usize, base + offsets[2]),
+            .tokens_count = ptr(*usize, base + offsets[3]),
+            .embeddings_count = ptr(*usize, base + offsets[4]),
+            .is_done_tokenizing = ptr(*bool, base + offsets[5]),
+            .text = ptr([*]u8, base + offsets[6]),
+            .tokens = ptr([*]u64, base + offsets[7]),
+            .embeddings = ptr([*]f32, base + offsets[8]),
         };
     }
-};
 
-fn do_tokenize(pipeline: *InferencePipeline, base: usize, slot: u16, offset: usize) void {
-    std.debug.print("doing tokenization!\n", .{});
-    const req = EmbeddingRequest.init(base + offset);
-
-    const token_count = wordpeice_encode(vocab_root_trie, vocab_trie, req.text, req.tokens);
-    for (0..token_count) |i| {
-        std.debug.print("{} ", .{req.tokens[i]});
+    pub fn pipeline(self: *const EmbeddingRequestView) *InferencePipeline {
+        return @ptrFromInt(@intFromPtr(self.size) - self.pipeline_offset.*);
     }
-    std.debug.print("\n", .{});
 
-    pipeline.embedding_queue.insert(slot, offset);
-}
+    fn bytes(text_size: usize) usize {
+        const offsets = EmbeddingRequestView.field_offsets(text_size);
+        return offsets[9];
+    }
+
+    fn prepare_embedding_request(base: usize, offset: usize, pipeline_v: *InferencePipeline, text: []const u8) void {
+        const view = EmbeddingRequestView.init(base + offset);
+        view.size.* = text.len;
+        for (0..text.len) |i| view.text[i] = text[i];
+        view.is_done_tokenizing.* = false;
+        view.pipeline_offset.* = base + offset - @intFromPtr(pipeline_v);
+        view.tokens_count.* = 0;
+        view.embeddings_count.* = 0;
+        view.offset.* = offset;
+    }
+};
 
 const SharedMemory = struct {
     head: usize,
@@ -410,11 +507,8 @@ pub const InferenceEngine = struct {
     // gpu resources
     model_runtime: TensorRTRuntime = undefined,
     model: TensorRTEngine = undefined,
-    streams: [GPU_MODELS]CudaStream = undefined,
-    execution_contexts: [GPU_MODELS]TensorRTExecutionContext = undefined,
-    tensor_attention_mask: *anyopaque = undefined,
-    tensor_input_ids: [GPU_MODELS]*anyopaque = undefined,
-    tensor_token_embeddings: [GPU_MODELS]*anyopaque = undefined,
+    gpu_devices: [GPU_MODELS]GpuDevice = undefined,
+    available_gpu_devices: RingQueue(u8, GPU_MODELS),
 
     pub fn init(size: usize) !InferenceEngine {
         return .{
@@ -422,6 +516,7 @@ pub const InferenceEngine = struct {
             .low_priority_pipeline = InferencePipeline.init(),
             .shared_memory = SharedMemory.init(size - 0x10000),
             .i = 0,
+            .available_gpu_devices = RingQueue(u8, GPU_MODELS).init(),
         };
     }
 
@@ -433,27 +528,26 @@ pub const InferenceEngine = struct {
 
         self.model_runtime = TensorRTRuntime.init();
         self.model = TensorRTEngine.init(&self.model_runtime);
-        self.tensor_attention_mask = gpu_memory;
         for (0..GPU_MODELS) |i| {
-            self.streams[i] = CudaStream.init();
-            self.execution_contexts[i] = TensorRTExecutionContext.init(&self.model);
-            self.tensor_input_ids[i] = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            self.gpu_devices[i].stream = CudaStream.init();
+            self.gpu_devices[i].execution_context = TensorRTExecutionContext.init(&self.model);
+            self.gpu_devices[i].attention_mask_tensor = gpu_memory;
+            self.gpu_devices[i].input_ids_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
             offset += MAX_INPUT_ID_BYTES;
-            self.tensor_token_embeddings[i] = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            self.gpu_devices[i].token_embeddings_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
             offset += MAX_TOKEN_EMBEDDING_BYTES;
+            self.available_gpu_devices.push(@intCast(i)) catch unreachable;
         }
     }
 
     pub fn deinit(self: *InferenceEngine) void {
         self.pool.deinit();
-        for (0..GPU_MODELS) |i| {
-            self.streams[i].deinit();
-            self.execution_contexts[i].deinit();
-        }
+        for (0..GPU_MODELS) |i| self.gpu_devices[i].deinit();
         self.model.deinit();
         self.model_runtime.deinit();
 
-        _ = cudaFree(self.tensor_attention_mask);
+        // NOTE: this looks wrong but its correct
+        _ = cudaFree(self.gpu_devices[0].attention_mask_tensor);
     }
 
     pub fn tick(self: *InferenceEngine) !void {
@@ -462,55 +556,46 @@ pub const InferenceEngine = struct {
             self.i = 0;
         }
         self.i += 1;
-        const did_tokenize = try self.high_priority_pipeline.tokenize(self.start_shared_memory_region(), &self.pool);
-        if (!did_tokenize) _ = try self.low_priority_pipeline.tokenize(self.start_shared_memory_region(), &self.pool);
-    }
 
-    fn embedding_request_max_bytes(text_size: usize) usize {
-        const n = 3 * text_size + @sizeOf(usize) + 2;
-        return std.mem.alignForward(usize, n, 8);
-    }
+        const base = self.start_shared_memory_region();
+        self.high_priority_pipeline.tokenize(base, &self.pool) catch {
+            self.low_priority_pipeline.tokenize(base, &self.pool) catch {};
+        };
 
-    fn start_shared_memory_region(self: *InferenceEngine) usize {
-        return @intFromPtr(self) + 0x10000;
-    }
-
-    fn copy_embedding_request_to_shared_memory(self: *InferenceEngine, text: []const u8, offset: usize) void {
-        var off = self.start_shared_memory_region() + offset;
-        @as(*usize, @ptrFromInt(off)).* = text.len;
-        off += @sizeOf(usize);
-        var i: usize = 0;
-        while (i < text.len) {
-            @as(*u8, @ptrFromInt(off)).* = text[i];
-            off += 1;
-            i += 1;
+        // TODO: need to add back the gpu once its done
+        while (true) {
+            const gpu_device_idx = self.available_gpu_devices.peek();
+            if (gpu_device_idx != null) {
+                const gpu_device = &self.gpu_devices[gpu_device_idx orelse unreachable];
+                self.high_priority_pipeline.embed(base, gpu_device) catch {
+                    self.low_priority_pipeline.embed(base, gpu_device) catch {
+                        break;
+                    };
+                };
+                self.available_gpu_devices.discard() catch unreachable;
+            }
+            break;
         }
     }
 
-    pub fn enqueue_high_priority_embedding_request(self: *InferenceEngine, text: []const u8) !i32 {
-        // here we allocate enough memory for the full job (or at least an upper bound)
-        const size = InferenceEngine.embedding_request_max_bytes(text.len);
-        const offset = try self.shared_memory.alloc(size);
-        std.debug.print("Allocated space for a high embed req {} @ {}\n", .{ size, offset });
-        // copy the stuff to the offset
-        self.copy_embedding_request_to_shared_memory(text, offset);
-        std.debug.print("Copied text to allocated shared memory\n", .{});
-
-        try self.high_priority_pipeline.enqueue(offset);
-        return 1;
+    fn start_shared_memory_region(self: *InferenceEngine) usize {
+        return @intFromPtr(self) + @sizeOf(InferenceEngine);
     }
 
-    pub fn enqueue_low_priority_embedding_request(self: *InferenceEngine, text: []const u8) !i32 {
-        // here we allocate enough memory for the full job (or at least an upper bound)
-        const size = InferenceEngine.embedding_request_max_bytes(text.len);
+    fn enqueue_embedding_request(self: *InferenceEngine, pipeline: *InferencePipeline, text: []const u8) !usize {
+        const size = EmbeddingRequestView.bytes(text.len);
         const offset = try self.shared_memory.alloc(size);
-        std.debug.print("Allocated space for a low embed req {} @ {}\n", .{ size, offset });
-        // copy the stuff to the offset
-        self.copy_embedding_request_to_shared_memory(text, offset);
-        std.debug.print("Copied text to allocated shared memory\n", .{});
+        EmbeddingRequestView.prepare_embedding_request(self.start_shared_memory_region(), offset, pipeline, text);
+        try pipeline.enqueue(offset);
+        return offset;
+    }
 
-        try self.low_priority_pipeline.enqueue(offset);
-        return 0;
+    pub fn enqueue_high_priority_embedding_request(self: *InferenceEngine, text: []const u8) !usize {
+        return self.enqueue_embedding_request(&self.high_priority_pipeline, text);
+    }
+
+    pub fn enqueue_low_priority_embedding_request(self: *InferenceEngine, text: []const u8) !usize {
+        return self.enqueue_embedding_request(&self.low_priority_pipeline, text);
     }
 };
 
@@ -542,10 +627,17 @@ pub fn unlock_and_unmap_fd(addr: [*]const u8, size: usize) void {
 // cuda and custom kernel functions and wrappers
 pub extern fn cudaMalloc(ptr: **anyopaque, size: usize) c_int;
 pub extern fn cudaFree(data: *anyopaque) callconv(.C) u32;
-pub extern fn cudaMemcpyAsync(dst: *anyopaque, src: *const anyopaque, size: usize, kind: c_int) void;
+pub const CudaMemcpyDirection = enum(c_int) {
+    h2h,
+    h2d,
+    d2h,
+    d2d,
+};
+pub extern fn cudaMemcpyAsync(dst: *anyopaque, src: *const anyopaque, size: usize, kind: CudaMemcpyDirection, stream: CudaStreamHandle) void;
 pub extern fn cudaHostRegister(ptr: *anyopaque, size: usize, flags: u32) void;
 pub extern fn cudaHostUnregister(ptr: *anyopaque) void;
 pub extern fn cudaDeviceSynchronize() void;
+pub extern fn cudaLaunchHostFunc(stream: CudaStreamHandle, func: ?*const fn (?*anyopaque) callconv(.C) void, data: ?*anyopaque) c_int;
 
 const CudaStreamHandle = *anyopaque;
 extern fn cudaStreamCreate(stream: *CudaStreamHandle) c_int;
@@ -556,14 +648,12 @@ pub const CudaStream = struct {
 
     pub fn init() CudaStream {
         var handle: CudaStreamHandle = undefined;
-        const err = cudaStreamCreate(&handle);
-        std.debug.print("Cuda stream create Error: {}\n", .{err});
+        _ = cudaStreamCreate(&handle);
         return .{ .handle = handle };
     }
 
     pub fn deinit(self: *CudaStream) void {
-        const err = cudaStreamDestroy(self.handle);
-        std.debug.print("Cuda stream destroy error: {}\n", .{err});
+        _ = cudaStreamDestroy(self.handle);
     }
 
     pub fn sync(self: *CudaStream) void {
@@ -632,9 +722,9 @@ pub const TensorRTEngine = struct {
 const TensorRTExecutionContextHandle = *anyopaque;
 extern fn create_execution_context(eng: TensorRTEngineHandle) TensorRTExecutionContextHandle;
 extern fn destroy_execution_context(ctx: TensorRTExecutionContextHandle) void;
-extern fn execution_context_set_tensor_shape(ctx: TensorRTExecutionContextHandle, batch: i32, size: i32) void;
+extern fn execution_context_set_tensor_shape(ctx: TensorRTExecutionContextHandle, batch: i64, size: i64) void;
 extern fn execution_context_set_device_memory(ctx: TensorRTExecutionContextHandle, ptr: *anyopaque) void;
-extern fn execution_context_set_tensor_address(ctx: TensorRTExecutionContextHandle, name: [*c]u8, ptr: *anyopaque) void;
+extern fn execution_context_set_tensor_address(ctx: TensorRTExecutionContextHandle, name: [*c]const u8, ptr: *anyopaque) void;
 extern fn execution_context_enqueue(ctx: TensorRTExecutionContextHandle, stream: CudaStreamHandle) void;
 pub const TensorRTExecutionContext = struct {
     handle: TensorRTExecutionContextHandle,
@@ -647,7 +737,7 @@ pub const TensorRTExecutionContext = struct {
         destroy_execution_context(self.handle);
     }
 
-    pub fn set_tensor_shape(self: *TensorRTExecutionContext, batch: i32, size: i32) void {
+    pub fn set_tensor_shape(self: *TensorRTExecutionContext, batch: i64, size: i64) void {
         execution_context_set_tensor_shape(self.handle, batch, size);
     }
 
@@ -655,7 +745,7 @@ pub const TensorRTExecutionContext = struct {
         execution_context_set_device_memory(self.handle, ptr);
     }
 
-    pub fn set_tensor_address(self: *TensorRTExecutionContext, name: [*c]u8, ptr: *anyopaque) void {
+    pub fn set_tensor_address(self: *TensorRTExecutionContext, name: [*c]const u8, ptr: *anyopaque) void {
         execution_context_set_tensor_address(self.handle, name, ptr);
     }
 

@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
 
     const version: std.SemanticVersion = .{ .major = 0, .minor = 0, .patch = 0 };
 
-    const exe = b.addExecutable(.{ .name = "inference-engine", .root_module = exe_mod, .version = version });
+    const exe = b.addExecutable(.{ .name = "inference-engine", .root_module = exe_mod, .version = version, .pic = false });
     const runtime = b.addLibrary(.{ .name = "inference-engine-runtime", .root_module = runtime_mod, .linkage = .dynamic, .version = version });
 
     exe.linkLibC();

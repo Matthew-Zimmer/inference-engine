@@ -70,7 +70,7 @@ extern "C" void destroy_execution_context(nvinfer1::IExecutionContext* ctx) {
 	delete ctx;
 }
 
-extern "C" void set_tensor_shape(nvinfer1::IExecutionContext* ctx, int32_t batch, int32_t size) {
+extern "C" void execution_context_set_tensor_shape(nvinfer1::IExecutionContext* ctx, int64_t batch, int64_t size) {
 	auto dims = nvinfer1::Dims64();
 	dims.nbDims = 2;
 	dims.d[0] = batch;
@@ -79,15 +79,19 @@ extern "C" void set_tensor_shape(nvinfer1::IExecutionContext* ctx, int32_t batch
 	ctx->setInputShape("attention_mask", dims);
 }
 
-extern "C" bool enqueue(nvinfer1::IExecutionContext* ctx, cudaStream_t stream) {
+extern "C" void execution_context_set_tensor_address(nvinfer1::IExecutionContext* ctx, char const* name, void* ptr) {
+	ctx->setTensorAddress(name, ptr);
+}
+
+extern "C" bool execution_context_enqueue(nvinfer1::IExecutionContext* ctx, cudaStream_t stream) {
         return ctx->enqueueV3(stream);
 }
 
-extern "C" void set_device_memory(nvinfer1::IExecutionContext* ctx, void* address, int64_t size) {
+extern "C" void execution_context_set_device_memory(nvinfer1::IExecutionContext* ctx, void* address, int64_t size) {
 	ctx->setDeviceMemoryV2(address, size);
 }
 
-extern "C" int64_t get_device_memory_size(nvinfer1::ICudaEngine* eng, int32_t profile) {
+extern "C" int64_t execution_context_get_device_memory_size(nvinfer1::ICudaEngine* eng, int32_t profile) {
 	return eng->getDeviceMemorySizeForProfileV2(profile);
 }
 

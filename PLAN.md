@@ -57,5 +57,5 @@ I am building an application which can serve low and high priority embedding tas
 51. [x] convert static library to zig module
 52. [x] prepare the pytensor to onnx format
 53. [x] prepare the onnx format to .engine format
-54. [ ] enqueue the embeding portion to the pipeline
+54. [x] enqueue the embeding portion to the pipeline
 

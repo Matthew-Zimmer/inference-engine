@@ -22,12 +22,15 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const SIZE = 4096 * 100;
+    const SIZE = 4096 * 1000;
     const memfd = lib.create_memory_fd(SIZE);
     defer lib.close_memory_fd(memfd);
 
     const addr = lib.map_and_lock_fd(memfd, SIZE);
     defer lib.unlock_and_unmap_fd(addr, SIZE);
+
+    lib.cudaHostRegister(addr, SIZE, 0);
+    defer lib.cudaHostUnregister(addr);
 
     const buffer: [32]u8 = .{0} ** 32;
     var writer = std.io.FixedBufferStream([32]u8){ .buffer = buffer, .pos = 0 };

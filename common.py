@@ -7,10 +7,10 @@ __all__ = [
 _lib = ctypes.CDLL("/home/matthew/inference-engine-2/zig-out/lib/libinference-engine-runtime.so")
 
 _lib.enqueue_high_priority_embedding_request.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-_lib.enqueue_high_priority_embedding_request.restype = ctypes.c_int32
+_lib.enqueue_high_priority_embedding_request.restype = ctypes.c_size_t
 
 _lib.enqueue_low_priority_embedding_request.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-_lib.enqueue_low_priority_embedding_request.restype = ctypes.c_int32
+_lib.enqueue_low_priority_embedding_request.restype = ctypes.c_size_t
 
 _lib.load_shared_memory_from_fd.argtypes = [ctypes.c_int32, ctypes.c_size_t]
 _lib.load_shared_memory_from_fd.restype = ctypes.c_void_p
