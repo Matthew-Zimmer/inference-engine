@@ -23,12 +23,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const tests = b.addTest(.{
-        .root_source_file = b.path("src/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // link cuda + tensor RT to
     // lib inference
 
@@ -41,18 +35,21 @@ pub fn build(b: *std.Build) void {
     lib_mod.linkSystemLibrary("cudart", .{});
 
     exe_mod.addImport("lib", lib_mod);
-
     runtime_mod.addImport("lib", lib_mod);
 
     const version: std.SemanticVersion = .{ .major = 0, .minor = 0, .patch = 0 };
 
     const exe = b.addExecutable(.{ .name = "inference-engine", .root_module = exe_mod, .version = version, .pic = false });
     const runtime = b.addLibrary(.{ .name = "inference-engine-runtime", .root_module = runtime_mod, .linkage = .dynamic, .version = version });
+    const tests = b.addTest(.{ .root_module = lib_mod });
 
     exe.linkLibC();
     exe.linkLibCpp();
 
     runtime.linkLibC();
+
+    tests.linkLibC();
+    tests.linkLibCpp();
 
     b.installArtifact(runtime);
     b.installArtifact(exe);

@@ -5,6 +5,8 @@ fd = int(sys.argv[1])
 size = int(sys.argv[2])
 
 with EngineRuntime(fd, size) as rt:
-    #print(rt.enqueue_low_priority_embedding_request("Embedding request from low script"))
+    text = "embedding request from low script" 
+    pages = [len(text)]
     pass
+    # print("[LOW SCRIPT] - request offset:", rt.enqueue_low_priority_chunked_embedding_request(text, pages))
 

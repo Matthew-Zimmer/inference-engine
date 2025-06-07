@@ -58,4 +58,17 @@ I am building an application which can serve low and high priority embedding tas
 52. [x] prepare the pytensor to onnx format
 53. [x] prepare the onnx format to .engine format
 54. [x] enqueue the embeding portion to the pipeline
+55. [x] implement new encoder struct
+56. [x] implement large chunking strategy
+57. [x] implement small chunking strategy
+58. [x] implement page chunking strategy
+59. [ ] need to bookkeep chunk to page mapping
+60. [ ] implement non chunked word peice encoder
+61. [ ] need to be able to request low priority non chunked encodings
+62. [ ] need to be able to request high priority non chunked encodings
+63. [ ] need to have an event file descriptor allocated to a request
+64. [ ] need to pool of event file descriptors
+65. [ ] after request is done need to deinit the memory and event fd
+66. [ ] implement the high priority http web server
+67. [ ] benchmark the inference engine
 

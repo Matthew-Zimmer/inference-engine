@@ -5,7 +5,9 @@ extern const _binary_trie_bin_start: opaque {};
 extern const _binary_trie_root_bin_start: opaque {};
 const vocab_trie: [*]const u8 = @ptrCast(&_binary_trie_bin_start);
 const vocab_root_trie: [*]const usize = @alignCast(@ptrCast(&_binary_trie_root_bin_start));
-const UNK: u16 = 101;
+const UNK: u16 = 100;
+const CLS: u16 = 101;
+const SEP: u16 = 102;
 
 const TrieNode = struct {
     id: u16,
@@ -35,191 +37,246 @@ const TrieNode = struct {
         }
         std.debug.print(")\n", .{});
     }
+
+    pub fn lookup_next(self: *TrieNode, c: u8) ?TrieNode {
+        for (0..self.size) |j| {
+            if (c == self.values[j]) {
+                return TrieNode.init(&vocab_trie[self.offsets[j]]);
+            }
+        }
+        return null;
+    }
 };
 
-test "1 word wordpiece encode" {
-    var tokens: [64]u16 = undefined;
-    const count = wordpeice_encode(vocab_root_trie, vocab_trie, "hello", &tokens);
-
-    // this test is not fully correct
-    // should have the start and end tokens!!!
-    try expect(count == 1);
-    try std.testing.expectEqual(7592, tokens[0]);
+fn is_whitespace(c: u8) bool {
+    return c == ' ' or c == '\n' or c == '\t' or c == '\r';
 }
 
-test "multi word wordpiece encode" {
-    var tokens: [64]u16 = undefined;
-    const count = wordpeice_encode(vocab_root_trie, vocab_trie, "embedding request from high script", &tokens);
+const ChunkedWordPeiceEncoder = struct {
+    const LOOK_AHEAD_SIZE = 64;
+    const LARGE_CHUNK_SIZE = 2048 - 1; // minus 1 for the end token
+    const SMALL_CHUNK_SIZE = 1024 - 1; // minus 1 for the end token
 
-    // this test is not fully correct
-    // should have the start and end tokens!!!
-    try expect(count == 7);
-    try std.testing.expectEqual(7861, tokens[0]);
-    try std.testing.expectEqual(8270, tokens[1]);
-    try std.testing.expectEqual(4667, tokens[2]);
-    try std.testing.expectEqual(5227, tokens[3]);
-    try std.testing.expectEqual(2013, tokens[4]);
-    try std.testing.expectEqual(2152, tokens[5]);
-    try std.testing.expectEqual(5896, tokens[6]);
-}
+    req: ChunkedEmbeddingRequestView,
+    index: usize,
+    current_page: usize,
+    root_offset: usize,
+    large_chunk_index: usize,
+    small_chunk_index: usize,
+    page_chunk_index: usize,
+    large_chunk_start_page: usize,
+    small_chunk_start_page: usize,
+    page_chunk_start_page: usize,
+    look_ahead_index: usize,
+    token_look_ahead: [LOOK_AHEAD_SIZE]u16 = undefined,
 
-// TODO: handle utf-8 more gracefully
-// TODO: add start and end tokens!
-fn wordpeice_encode(req: EmbeddingRequestView) void {
-    std.debug.print("Generating token ids for '{s}'\n", .{req.text[0..req.size.*]});
-    var i: usize = 0;
-    var root_offset: usize = 0;
-    var token_count: usize = 0;
-    top: while (i < req.size.*) {
-        const c = req.text[i];
-        switch (c) {
-            // skip over whitespace
-            // TODO: Think does `root_offset` need to be reset back to 0 here?
-            ' ', '\t', '\n', '\r' => i += 1,
-            // handle stuff for other characters
-            else => {
-                const offset = vocab_root_trie[c + root_offset];
-                // need to check if this logic is needed
-                // break out if root char invalid
-                if (offset == -1) {
-                    req.tokens[token_count] = UNK;
-                    token_count += 1;
-                    i += 1;
-                    continue;
-                }
-                var found_tokens: [64]u16 = undefined;
-                var found_token_idx: u8 = 1;
-                var node = TrieNode.init(&vocab_trie[offset]);
-                found_tokens[0] = node.id;
-                inner: while (i + found_token_idx < req.size.*) {
-                    const b = req.text[i + found_token_idx];
+    pub fn init(req: ChunkedEmbeddingRequestView) ChunkedWordPeiceEncoder {
+        return .{
+            .req = req,
+            .index = 0,
+            .current_page = 0,
+            .root_offset = 0,
+            .large_chunk_index = 0,
+            .small_chunk_index = 0,
+            .page_chunk_index = 0,
+            .large_chunk_start_page = 0,
+            .small_chunk_start_page = 0,
+            .page_chunk_start_page = 0,
+            .look_ahead_index = 0,
+        };
+    }
 
-                    // TODO: we also need to handle whitespace
-                    // that should start a new word!!!!
+    fn peek(self: *ChunkedWordPeiceEncoder, offset: usize) u8 {
+        const c = self.req.text[self.index + offset];
+        return c;
+    }
 
-                    switch (b) {
-                        ' ', '\n', '\t', '\r' => {
-                            // NOTE: This code looks very simular to the code at the end of
-                            // the prefix matching code
-                            // but there is a small difference that we know that the next character
-                            // is a white space so `i` may be advanced an extra spot since whitespace would
-                            // normally just be skipped
+    fn advance(self: *ChunkedWordPeiceEncoder, stride: usize) void {
+        self.index += stride;
 
-                            for (0..found_token_idx) |j| {
-                                const idx = found_token_idx - j - 1;
-                                if (found_tokens[idx] != UNK) {
-                                    req.tokens[token_count] = found_tokens[idx];
-                                    token_count += 1;
-
-                                    // this case means we had a valid word then a whitespace
-                                    if (j == 0) {
-                                        i += found_token_idx + 1;
-                                        root_offset = 0;
-                                    }
-                                    // only a sub word matched
-                                    else {
-                                        i += idx;
-                                        root_offset = 256;
-                                    }
-
-                                    continue :top;
-                                }
-                            }
-
-                            // only happens if all found tokens are UNK
-                            // advance i by 1 or 2 depending on if found tokens is 1
-                            // conditionally set root_offset
-                            req.tokens[token_count] = UNK;
-                            token_count += 1;
-                            // only 1 char then whitespace
-                            // we can advance 2 (unknown char + the space)
-                            if (found_token_idx == 1) {
-                                i += 2;
-                                root_offset = 0;
-                            }
-                            // n chars then whitespace
-                            else {
-                                i += 1;
-                                root_offset = 256;
-                            }
-
-                            continue :top;
-                        },
-                        else => {},
-                    }
-
-                    for (0..node.size) |j| {
-                        if (b == node.values[j]) {
-                            node = TrieNode.init(&vocab_trie[node.offsets[j]]);
-                            found_tokens[found_token_idx] = node.id;
-                            found_token_idx += 1;
-                            continue :inner;
-                        }
-                    }
-
-                    // only will be here if no value is found
-                    // we need to push the last found token
-                    // then advance `i` by that much
-                    // with a "##" prefix as root
-                    for (0..found_token_idx) |j| {
-                        const idx = found_token_idx - j - 1;
-                        if (found_tokens[idx] != UNK) {
-                            req.tokens[token_count] = found_tokens[idx];
-                            token_count += 1;
-                            i += idx + 1;
-                            // TODO: do we need to set the ## conditionaly here?
-                            root_offset = 256;
-                            continue :top;
-                        }
-                    }
-
-                    // will only be here if all found tokens are UNK
-                    // only advance "i" by 1 and retry from the start
-                    // with a "##" prefix as root
-                    req.tokens[token_count] = UNK;
-                    token_count += 1;
-                    i += 1;
-                    // TODO: do we need to set the ## conditionaly here?
-                    root_offset = 256;
-                    continue :top;
-                }
-
-                // if we are here it means that we have exhausted the full text
-                for (0..found_token_idx) |j| {
-                    const idx = found_token_idx - j - 1;
-                    if (found_tokens[idx] != UNK) {
-                        req.tokens[token_count] = found_tokens[idx];
-                        token_count += 1;
-                        if (j == 0) {
-                            break :top;
-                        }
-                        i += idx;
-                        // TODO: do we need to set the ## conditionaly here?
-                        root_offset = 256;
-                        continue :top;
-                    }
-                }
-
-                // no matches but we hit the end of the string
-                req.tokens[token_count] = UNK;
-                token_count += 1;
-                break :top;
-            },
+        while (self.index >= self.req.page_offsets[self.current_page]) {
+            self.current_page += 1;
         }
     }
 
-    std.debug.print("Encoded tokens: ", .{});
-    for (0..token_count) |a| {
-        std.debug.print("{} ", .{req.tokens[a]});
-    }
-    std.debug.print("\n", .{});
+    fn emit_token(self: *ChunkedWordPeiceEncoder, token: u16) void {
+        // copy token to large token stream
+        self.req.large_chunk_tokens[self.req.large_tokens_count.*] = token;
+        self.req.large_tokens_count.* += 1;
 
-    req.is_done_tokenizing.* = true;
-    req.tokens_count.* = 1; // really token chunk count
-    req.pipeline().embedding_queue.push(.{ .offset = req.offset.*, .index = 0, .size = token_count, .batch = 1 }) catch {
-        std.debug.print("FAILED TO enqueue embedding work\n", .{});
-    };
-}
+        if (self.req.large_tokens_count.* % LARGE_CHUNK_SIZE == 0) {
+            self.req.large_chunk_tokens[self.req.large_tokens_count.*] = SEP;
+            self.req.large_tokens_count.* += 1;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.large_chunk_index, .size = LARGE_CHUNK_SIZE, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the large chunk token
+            };
+
+            self.large_chunk_index += LARGE_CHUNK_SIZE + 1;
+            self.req.large_chunk_tokens[self.req.large_tokens_count.*] = CLS;
+
+            self.req.large_tokens_count.* += 1;
+            self.large_chunk_start_page = self.current_page;
+        }
+
+        // copy token to small token stream
+        self.req.small_chunk_tokens[self.req.small_tokens_count.*] = token;
+        self.req.small_tokens_count.* += 1;
+
+        if (self.req.small_tokens_count.* % SMALL_CHUNK_SIZE == 0) {
+            self.req.small_chunk_tokens[self.req.small_tokens_count.*] = SEP;
+            self.req.small_tokens_count.* += 1;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.small_chunk_index, .size = SMALL_CHUNK_SIZE, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the small chunk token
+            };
+
+            self.small_chunk_index += SMALL_CHUNK_SIZE + 1;
+            self.req.small_chunk_tokens[self.req.small_tokens_count.*] = CLS;
+
+            self.req.small_tokens_count.* += 1;
+            self.small_chunk_start_page = self.current_page;
+        }
+
+        // copy token to page token stream
+        self.req.page_chunk_tokens[self.req.page_tokens_count.*] = token;
+        self.req.page_tokens_count.* += 1;
+
+        if (self.page_chunk_start_page != self.current_page) {
+            self.req.page_chunk_tokens[self.req.page_tokens_count.*] = SEP;
+            self.req.page_tokens_count.* += 1;
+
+            const size = self.req.page_tokens_count.* - self.page_chunk_index;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.page_chunk_index, .size = size, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the small chunk token
+            };
+
+            self.req.page_chunk_tokens[self.req.page_tokens_count.*] = CLS;
+            self.req.page_tokens_count.* += 1;
+
+            self.page_chunk_index += size + 1;
+            self.page_chunk_start_page = self.current_page;
+        }
+    }
+
+    fn assign_root_offset(self: *ChunkedWordPeiceEncoder) void {
+        if (self.index < self.req.size.*) {
+            self.root_offset = if (is_whitespace(self.peek(0))) 0 else 256;
+        }
+        self.look_ahead_index = 0;
+    }
+
+    fn add_look_ahead(self: *ChunkedWordPeiceEncoder, token: u16) void {
+        self.token_look_ahead[self.look_ahead_index] = token;
+        self.look_ahead_index += 1;
+    }
+
+    fn commit_look_ahead(self: *ChunkedWordPeiceEncoder) void {
+        for (0..self.look_ahead_index) |i| {
+            const index = self.look_ahead_index - i - 1;
+            const token = self.token_look_ahead[index];
+            if (token != UNK) {
+                self.advance(index + 1);
+                self.emit_token(token);
+                self.assign_root_offset();
+                return;
+            }
+        }
+
+        self.advance(1);
+        self.emit_token(UNK);
+        self.assign_root_offset();
+    }
+
+    pub fn encode(self: *ChunkedWordPeiceEncoder) void {
+        std.debug.print("Generating token ids for '{s}'\n", .{self.req.text[0..self.req.size.*]});
+        const size = self.req.size.*;
+
+        while (self.index < size) {
+            inner: while (self.index < size) {
+                const c = self.peek(0);
+                if (is_whitespace(c)) {
+                    self.advance(1);
+                    continue :inner;
+                }
+
+                const offset = vocab_root_trie[c];
+                if (offset == -1) {
+                    self.advance(1);
+                    self.emit_token(UNK);
+                    continue :inner;
+                }
+                var node = TrieNode.init(&vocab_trie[vocab_root_trie[c + self.root_offset]]);
+                self.add_look_ahead(node.id);
+                const max_look_ahead = @min(LOOK_AHEAD_SIZE, size - self.index);
+                for (1..max_look_ahead) |i| {
+                    node = node.lookup_next(self.peek(i)) orelse {
+                        self.commit_look_ahead();
+                        continue :inner;
+                    };
+                    self.add_look_ahead(node.id);
+                }
+                self.commit_look_ahead();
+            }
+
+            // there exists some characters that have not been converted into tokens
+            // NOTE: its not ganenteed that this will consume all characters
+            // the look ahead buffer may no have a partial match even though
+            // it fully walked the input stream
+            // EXAMPLE: embed (assumming embedded is in the vocab but embed is not)
+            // the this would not consume all characters and would need another go around
+            // till either the look ahead is empty or it consumes all characters
+            if (self.look_ahead_index > 0) {
+                self.commit_look_ahead();
+            }
+        }
+
+        // there exists a non complete chunk of large chunked tokens
+        if (self.large_chunk_index != self.req.large_tokens_count.*) {
+            self.req.large_chunk_tokens[self.req.large_tokens_count.*] = SEP;
+            self.req.large_tokens_count.* += 1;
+
+            const remainding_tokens = self.req.large_tokens_count.* - self.large_chunk_index;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.large_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the large chunk token
+            };
+        }
+
+        // there exists a non complete chunk of small chunked tokens
+        if (self.small_chunk_index != self.req.small_tokens_count.*) {
+            self.req.small_chunk_tokens[self.req.small_tokens_count.*] = SEP;
+            self.req.small_tokens_count.* += 1;
+
+            const remainding_tokens = self.req.small_tokens_count.* - self.small_chunk_index;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.small_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the small chunk token
+            };
+        }
+
+        // there exists a non complete chunk of page chunked tokens
+        if (self.page_chunk_index != self.req.page_tokens_count.*) {
+            self.req.page_chunk_tokens[self.req.page_tokens_count.*] = SEP;
+            self.req.page_tokens_count.* += 1;
+
+            const remainding_tokens = self.req.page_tokens_count.* - self.page_chunk_index;
+
+            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.page_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+                // TODO: wtf to do here????
+                // we failed to insert the large chunk token
+            };
+        }
+
+        self.req.is_done_tokenizing.* = true;
+    }
+};
 
 fn RingQueue(comptime T: type, comptime N: u16) type {
     const M = N + 1;
@@ -318,7 +375,7 @@ const InferencePipeline = struct {
 
     pub fn tokenize(self: *InferencePipeline, base: usize, pool: *std.Thread.Pool) !void {
         const offset = try self.tokenization_queue.pop();
-        pool.spawn(wordpeice_encode, .{EmbeddingRequestView.init(base + offset)}) catch |e| {
+        pool.spawn(wordpeice_encode, .{ChunkedEmbeddingRequestView.view(base + offset)}) catch |e| {
             std.debug.print("POOL SPAWN ERROR: {}\n", .{e});
         };
     }
@@ -326,10 +383,10 @@ const InferencePipeline = struct {
     pub fn embed(self: *InferencePipeline, base: usize, device: *GpuDevice) !void {
         const item = try self.embedding_queue.pop();
         const ptr = base + item.offset;
-        const req = EmbeddingRequestView.init(ptr);
+        const req = ChunkedEmbeddingRequestView.view(ptr);
 
         //var floats: [768]f32 = undefined;
-        cudaMemcpyAsync(device.input_ids_tensor, req.tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
+        cudaMemcpyAsync(device.input_ids_tensor, req.large_chunk_tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
         device.execution_context.set_tensor_shape(@intCast(item.batch), @intCast(item.size));
         device.execution_context.set_tensor_address("input_ids", device.input_ids_tensor);
         device.execution_context.set_tensor_address("attention_mask", device.attention_mask_tensor); // TODO: this may or may not be needed
@@ -340,101 +397,163 @@ const InferencePipeline = struct {
     }
 };
 
+fn wordpeice_encode(req: ChunkedEmbeddingRequestView) void {
+    var encoder = ChunkedWordPeiceEncoder.init(req);
+    encoder.encode();
+}
+
 export fn cuda_embedding_callback(data: ?*anyopaque) callconv(.C) void {
-    const req = EmbeddingRequestView.init(@intFromPtr(data));
+    const req = ChunkedEmbeddingRequestView.view(@intFromPtr(data));
     for (0..10) |i| std.debug.print("{} ", .{req.embeddings[i]});
     std.debug.print("\n", .{});
 }
 
-const EmbeddingRequestView = struct {
+const ChunkedEmbeddingRequestView = struct {
     size: *usize,
+    pages: *usize,
     offset: *usize,
     pipeline_offset: *usize,
-    tokens_count: *usize,
+    large_tokens_count: *usize,
+    small_tokens_count: *usize,
+    page_tokens_count: *usize,
     embeddings_count: *usize,
     is_done_tokenizing: *bool,
 
     text: [*]u8,
-    tokens: [*]u64,
+    page_offsets: [*]u64,
+    large_chunk_tokens: [*]u64,
+    small_chunk_tokens: [*]u64,
+    page_chunk_tokens: [*]u64,
     embeddings: [*]f32,
 
     fn ptr(comptime T: type, val: usize) T {
         return @as(T, @ptrFromInt(val));
     }
 
-    fn field_offsets(text_size: usize) [10]usize {
-        var offsets: [10]usize = undefined;
+    fn field_offsets(text_size: usize, pages: usize) [16]usize {
+        var offsets: [16]usize = undefined;
         var cum: usize = 0;
 
+        // size
         offsets[0] = 0;
         cum += @sizeOf(usize);
 
+        // pages
         offsets[1] = cum;
         cum += @sizeOf(usize);
 
+        // offset
         offsets[2] = cum;
         cum += @sizeOf(usize);
 
+        // pipeline_offset
         offsets[3] = cum;
         cum += @sizeOf(usize);
 
+        // large_tokens_count
         offsets[4] = cum;
         cum += @sizeOf(usize);
 
+        // small_tokens_count
         offsets[5] = cum;
+        cum += @sizeOf(usize);
+
+        // page_tokens_count
+        offsets[6] = cum;
+        cum += @sizeOf(usize);
+
+        // embeddings_count
+        offsets[7] = cum;
+        cum += @sizeOf(usize);
+
+        // is_done_tokenizing
+        offsets[8] = cum;
         cum += @sizeOf(bool);
 
-        offsets[6] = cum;
-        cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u64));
+        // text
+        offsets[9] = cum;
+        cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u8));
 
-        offsets[7] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(f32));
+        // page offsets
+        offsets[10] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u64) * pages, @sizeOf(u64));
 
-        offsets[8] = cum;
+        // large chunk tokens
+        offsets[11] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
+
+        // small chunk tokens
+        offsets[12] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
+
+        // page chunk tokens
+        offsets[13] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
+
+        // embeddings
+        offsets[14] = cum;
         // this is a very conservative estimate of embedding space
         // TODO: improve this estimate once chunking strategies are implemented
         cum = std.mem.alignForward(usize, cum + 768 * text_size * @sizeOf(f32), 8);
 
-        offsets[9] = cum;
+        // total size
+        offsets[15] = cum;
 
         return offsets;
     }
 
-    pub fn init(base: usize) EmbeddingRequestView {
+    pub fn view(base: usize) ChunkedEmbeddingRequestView {
         const size = @as(*usize, @ptrFromInt(base)).*;
-        const offsets = EmbeddingRequestView.field_offsets(size);
+        const pages = @as(*usize, @ptrFromInt(base + @sizeOf(usize))).*;
+
+        return ChunkedEmbeddingRequestView.init(base, size, pages);
+    }
+
+    fn init(base: usize, size: usize, pages: usize) ChunkedEmbeddingRequestView {
+        const offsets = ChunkedEmbeddingRequestView.field_offsets(size, pages);
 
         return .{
             .size = ptr(*usize, base + offsets[0]),
-            .offset = ptr(*usize, base + offsets[1]),
-            .pipeline_offset = ptr(*usize, base + offsets[2]),
-            .tokens_count = ptr(*usize, base + offsets[3]),
-            .embeddings_count = ptr(*usize, base + offsets[4]),
-            .is_done_tokenizing = ptr(*bool, base + offsets[5]),
-            .text = ptr([*]u8, base + offsets[6]),
-            .tokens = ptr([*]u64, base + offsets[7]),
-            .embeddings = ptr([*]f32, base + offsets[8]),
+            .pages = ptr(*usize, base + offsets[1]),
+            .offset = ptr(*usize, base + offsets[2]),
+            .pipeline_offset = ptr(*usize, base + offsets[3]),
+            .large_tokens_count = ptr(*usize, base + offsets[4]),
+            .small_tokens_count = ptr(*usize, base + offsets[5]),
+            .page_tokens_count = ptr(*usize, base + offsets[6]),
+            .embeddings_count = ptr(*usize, base + offsets[7]),
+            .is_done_tokenizing = ptr(*bool, base + offsets[8]),
+            .text = ptr([*]u8, base + offsets[9]),
+            .page_offsets = ptr([*]u64, base + offsets[10]),
+            .large_chunk_tokens = ptr([*]u64, base + offsets[11]),
+            .small_chunk_tokens = ptr([*]u64, base + offsets[12]),
+            .page_chunk_tokens = ptr([*]u64, base + offsets[13]),
+            .embeddings = ptr([*]f32, base + offsets[14]),
         };
     }
 
-    pub fn pipeline(self: *const EmbeddingRequestView) *InferencePipeline {
+    pub fn pipeline(self: *const ChunkedEmbeddingRequestView) *InferencePipeline {
         return @ptrFromInt(@intFromPtr(self.size) - self.pipeline_offset.*);
     }
 
-    fn bytes(text_size: usize) usize {
-        const offsets = EmbeddingRequestView.field_offsets(text_size);
-        return offsets[9];
+    fn bytes(text_size: usize, pages: usize) usize {
+        const offsets = ChunkedEmbeddingRequestView.field_offsets(text_size, pages);
+        return offsets[15];
     }
 
-    fn prepare_embedding_request(base: usize, offset: usize, pipeline_v: *InferencePipeline, text: []const u8) void {
-        const view = EmbeddingRequestView.init(base + offset);
-        view.size.* = text.len;
-        for (0..text.len) |i| view.text[i] = text[i];
-        view.is_done_tokenizing.* = false;
-        view.pipeline_offset.* = base + offset - @intFromPtr(pipeline_v);
-        view.tokens_count.* = 0;
-        view.embeddings_count.* = 0;
-        view.offset.* = offset;
+    fn init_data(base: usize, offset: usize, pipeline_v: *InferencePipeline, text: []const u8, pages: []const u64) void {
+        const req = ChunkedEmbeddingRequestView.init(base + offset, text.len, pages.len);
+
+        req.size.* = text.len;
+        req.pages.* = pages.len;
+        for (0..text.len) |i| req.text[i] = text[i];
+        for (0..pages.len) |i| req.page_offsets[i] = pages[i];
+        req.is_done_tokenizing.* = false;
+        req.pipeline_offset.* = base + offset - @intFromPtr(pipeline_v);
+        req.large_tokens_count.* = 0;
+        req.small_tokens_count.* = 0;
+        req.page_tokens_count.* = 0;
+        req.embeddings_count.* = 0;
+        req.offset.* = offset;
     }
 };
 
@@ -582,20 +701,20 @@ pub const InferenceEngine = struct {
         return @intFromPtr(self) + @sizeOf(InferenceEngine);
     }
 
-    fn enqueue_embedding_request(self: *InferenceEngine, pipeline: *InferencePipeline, text: []const u8) !usize {
-        const size = EmbeddingRequestView.bytes(text.len);
+    fn enqueue_chunked_embedding_request(self: *InferenceEngine, pipeline: *InferencePipeline, text: []const u8, pages: []const u64) !usize {
+        const size = ChunkedEmbeddingRequestView.bytes(text.len, pages.len);
         const offset = try self.shared_memory.alloc(size);
-        EmbeddingRequestView.prepare_embedding_request(self.start_shared_memory_region(), offset, pipeline, text);
+        ChunkedEmbeddingRequestView.init_data(self.start_shared_memory_region(), offset, pipeline, text, pages);
         try pipeline.enqueue(offset);
         return offset;
     }
 
-    pub fn enqueue_high_priority_embedding_request(self: *InferenceEngine, text: []const u8) !usize {
-        return self.enqueue_embedding_request(&self.high_priority_pipeline, text);
+    pub fn enqueue_high_priority_chunked_embedding_request(self: *InferenceEngine, text: []const u8, pages: []const u64) !usize {
+        return self.enqueue_chunked_embedding_request(&self.high_priority_pipeline, text, pages);
     }
 
-    pub fn enqueue_low_priority_embedding_request(self: *InferenceEngine, text: []const u8) !usize {
-        return self.enqueue_embedding_request(&self.low_priority_pipeline, text);
+    pub fn enqueue_low_priority_chunked_embedding_request(self: *InferenceEngine, text: []const u8, pages: []const u64) !usize {
+        return self.enqueue_chunked_embedding_request(&self.low_priority_pipeline, text, pages);
     }
 };
 
