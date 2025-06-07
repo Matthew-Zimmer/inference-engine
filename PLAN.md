@@ -44,7 +44,7 @@ I am building an application which can serve low and high priority embedding tas
 38. [x] implement word piece algo for the model
 39. [x] print the token ids
 40. [x] write tests for word piece algo
-41. [ ] write the upcast u16 -> i64 cuda kernel
+41. [x] write the upcast u16 -> i64 cuda kernel
 42. [x] wrap cuda kernel in C linkage
 43. [x] wrap tensorRT functions in C linkage
 44. [x] delcare cuda kernel function in zig
@@ -71,4 +71,9 @@ I am building an application which can serve low and high priority embedding tas
 65. [ ] after request is done need to deinit the memory and event fd
 66. [ ] implement the high priority http web server
 67. [ ] benchmark the inference engine
+68. [x] need an averager cuda kernel on the gpu side to average all embeddings
+69. [x] allocate space on gpu for u16 and u64 for tokens
+70. [x] invoke the u16 -> u64 upcast kernel before sending to model
+71. [x] invoke the averaging kernel after the model is ran
+72. [x] change tokening cpu side to use u16s instead of u64s
 

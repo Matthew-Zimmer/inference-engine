@@ -62,11 +62,14 @@ const ChunkedWordPeiceEncoder = struct {
     current_page: usize,
     root_offset: usize,
     large_chunk_index: usize,
-    small_chunk_index: usize,
-    page_chunk_index: usize,
     large_chunk_start_page: usize,
+    large_chunk_embeddings_count: usize,
+    small_chunk_index: usize,
     small_chunk_start_page: usize,
+    small_chunk_embeddings_count: usize,
+    page_chunk_index: usize,
     page_chunk_start_page: usize,
+    page_chunk_embeddings_count: usize,
     look_ahead_index: usize,
     token_look_ahead: [LOOK_AHEAD_SIZE]u16 = undefined,
 
@@ -77,11 +80,14 @@ const ChunkedWordPeiceEncoder = struct {
             .current_page = 0,
             .root_offset = 0,
             .large_chunk_index = 0,
-            .small_chunk_index = 0,
-            .page_chunk_index = 0,
             .large_chunk_start_page = 0,
+            .large_chunk_embeddings_count = 0,
+            .small_chunk_index = 0,
             .small_chunk_start_page = 0,
+            .small_chunk_embeddings_count = 0,
+            .page_chunk_index = 0,
             .page_chunk_start_page = 0,
+            .page_chunk_embeddings_count = 0,
             .look_ahead_index = 0,
         };
     }
@@ -108,11 +114,19 @@ const ChunkedWordPeiceEncoder = struct {
             self.req.large_chunk_tokens[self.req.large_tokens_count.*] = SEP;
             self.req.large_tokens_count.* += 1;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.large_chunk_index, .size = LARGE_CHUNK_SIZE, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = LARGE_CHUNK_SIZE,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.large_chunk_tokens[self.large_chunk_index]),
+                .embeddings = @ptrCast(&self.req.large_chunk_embeddings[self.large_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the large chunk token
             };
 
+            self.large_chunk_embeddings_count += 1;
             self.large_chunk_index += LARGE_CHUNK_SIZE + 1;
             self.req.large_chunk_tokens[self.req.large_tokens_count.*] = CLS;
 
@@ -128,11 +142,19 @@ const ChunkedWordPeiceEncoder = struct {
             self.req.small_chunk_tokens[self.req.small_tokens_count.*] = SEP;
             self.req.small_tokens_count.* += 1;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.small_chunk_index, .size = SMALL_CHUNK_SIZE, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = SMALL_CHUNK_SIZE,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.small_chunk_tokens[self.small_chunk_index]),
+                .embeddings = @ptrCast(&self.req.small_chunk_embeddings[self.small_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the small chunk token
             };
 
+            self.small_chunk_embeddings_count += 1;
             self.small_chunk_index += SMALL_CHUNK_SIZE + 1;
             self.req.small_chunk_tokens[self.req.small_tokens_count.*] = CLS;
 
@@ -150,11 +172,19 @@ const ChunkedWordPeiceEncoder = struct {
 
             const size = self.req.page_tokens_count.* - self.page_chunk_index;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.page_chunk_index, .size = size, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = size,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.page_chunk_tokens[self.page_chunk_index]),
+                .embeddings = @ptrCast(&self.req.page_chunk_embeddings[self.page_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the small chunk token
             };
 
+            self.page_chunk_embeddings_count += 1;
             self.req.page_chunk_tokens[self.req.page_tokens_count.*] = CLS;
             self.req.page_tokens_count.* += 1;
 
@@ -242,7 +272,14 @@ const ChunkedWordPeiceEncoder = struct {
 
             const remainding_tokens = self.req.large_tokens_count.* - self.large_chunk_index;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.large_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = remainding_tokens,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.large_chunk_tokens[self.large_chunk_index]),
+                .embeddings = @ptrCast(&self.req.large_chunk_embeddings[self.large_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the large chunk token
             };
@@ -255,7 +292,14 @@ const ChunkedWordPeiceEncoder = struct {
 
             const remainding_tokens = self.req.small_tokens_count.* - self.small_chunk_index;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.small_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = remainding_tokens,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.small_chunk_tokens[self.small_chunk_index]),
+                .embeddings = @ptrCast(&self.req.small_chunk_embeddings[self.small_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the small chunk token
             };
@@ -268,7 +312,14 @@ const ChunkedWordPeiceEncoder = struct {
 
             const remainding_tokens = self.req.page_tokens_count.* - self.page_chunk_index;
 
-            self.req.pipeline().embedding_queue.push(.{ .offset = self.req.offset.*, .index = self.page_chunk_index, .size = remainding_tokens, .batch = 1 }) catch {
+            self.req.token_chunks_count.* += 1;
+            self.req.pipeline().embedding_queue.push(.{
+                .offset = self.req.offset.*,
+                .size = remainding_tokens,
+                .batch = 1,
+                .tokens = @ptrCast(&self.req.page_chunk_tokens[self.page_chunk_index]),
+                .embeddings = @ptrCast(&self.req.page_chunk_embeddings[self.page_chunk_embeddings_count * ChunkedEmbeddingRequestView.MODEL_DIM]),
+            }) catch {
                 // TODO: wtf to do here????
                 // we failed to insert the large chunk token
             };
@@ -339,7 +390,8 @@ fn RingQueue(comptime T: type, comptime N: u16) type {
 const GpuDevice = struct {
     stream: CudaStream,
     execution_context: TensorRTExecutionContext,
-    input_ids_tensor: *anyopaque,
+    skinny_input_ids_tensor: *anyopaque,
+    fat_input_ids_tensor: *anyopaque,
     attention_mask_tensor: *anyopaque,
     token_embeddings_tensor: *anyopaque,
 
@@ -350,22 +402,31 @@ const GpuDevice = struct {
 };
 
 const TokenizationQueue = RingQueue(usize, 128);
+const ChunkType = enum {
+    large,
+    small,
+    page,
+};
 const EmbeddingQueueItem = struct {
     offset: usize,
-    index: usize,
     batch: usize,
     size: usize,
+    tokens: [*]u16,
+    embeddings: [*]f32,
 };
 const EmbeddingQueue = RingQueue(EmbeddingQueueItem, 1024);
+const NotifyQueue = RingQueue(usize, 128);
 
 const InferencePipeline = struct {
     tokenization_queue: TokenizationQueue,
     embedding_queue: EmbeddingQueue,
+    notify_queue: NotifyQueue,
 
     pub fn init() InferencePipeline {
         return .{
             .tokenization_queue = TokenizationQueue.init(),
             .embedding_queue = EmbeddingQueue.init(),
+            .notify_queue = NotifyQueue.init(),
         };
     }
 
@@ -383,16 +444,16 @@ const InferencePipeline = struct {
     pub fn embed(self: *InferencePipeline, base: usize, device: *GpuDevice) !void {
         const item = try self.embedding_queue.pop();
         const ptr = base + item.offset;
-        const req = ChunkedEmbeddingRequestView.view(ptr);
 
-        //var floats: [768]f32 = undefined;
-        cudaMemcpyAsync(device.input_ids_tensor, req.large_chunk_tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
+        cudaMemcpyAsync(device.skinny_input_ids_tensor, item.tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
+        upcast_uint16_to_int64(@alignCast(@ptrCast(device.skinny_input_ids_tensor)), @alignCast(@ptrCast(device.fat_input_ids_tensor)), item.batch * item.size, device.stream.handle);
         device.execution_context.set_tensor_shape(@intCast(item.batch), @intCast(item.size));
-        device.execution_context.set_tensor_address("input_ids", device.input_ids_tensor);
+        device.execution_context.set_tensor_address("input_ids", device.fat_input_ids_tensor);
         device.execution_context.set_tensor_address("attention_mask", device.attention_mask_tensor); // TODO: this may or may not be needed
         device.execution_context.set_tensor_address("token_embeddings", device.token_embeddings_tensor);
         device.execution_context.enqueue(device.stream);
-        cudaMemcpyAsync(req.embeddings, device.token_embeddings_tensor, item.batch * item.size * 768 * @sizeOf(f32), .d2h, device.stream.handle);
+        average_token_embeddings(@alignCast(@ptrCast(device.token_embeddings_tensor)), item.batch, item.size, device.stream.handle);
+        cudaMemcpyAsync(item.embeddings, device.token_embeddings_tensor, item.batch * 768 * @sizeOf(f32), .d2h, device.stream.handle);
         _ = cudaLaunchHostFunc(device.stream.handle, cuda_embedding_callback, @ptrFromInt(ptr));
     }
 };
@@ -404,11 +465,21 @@ fn wordpeice_encode(req: ChunkedEmbeddingRequestView) void {
 
 export fn cuda_embedding_callback(data: ?*anyopaque) callconv(.C) void {
     const req = ChunkedEmbeddingRequestView.view(@intFromPtr(data));
-    for (0..10) |i| std.debug.print("{} ", .{req.embeddings[i]});
-    std.debug.print("\n", .{});
+    req.embeddings_count.* += 1;
+    if (req.is_done_tokenizing.* and req.token_chunks_count.* == req.embeddings_count.*) {
+        req.pipeline().notify_queue.push(req.offset.*) catch {
+            // TODO: WTF to do here?
+        };
+    }
+}
+
+fn number_of_groups(n: usize, size: usize) usize {
+    return n / size + @intFromBool(n % size > 0);
 }
 
 const ChunkedEmbeddingRequestView = struct {
+    const MODEL_DIM = 768;
+
     size: *usize,
     pages: *usize,
     offset: *usize,
@@ -416,23 +487,32 @@ const ChunkedEmbeddingRequestView = struct {
     large_tokens_count: *usize,
     small_tokens_count: *usize,
     page_tokens_count: *usize,
+    token_chunks_count: *usize,
     embeddings_count: *usize,
     is_done_tokenizing: *bool,
 
     text: [*]u8,
     page_offsets: [*]u64,
-    large_chunk_tokens: [*]u64,
-    small_chunk_tokens: [*]u64,
-    page_chunk_tokens: [*]u64,
-    embeddings: [*]f32,
+    large_chunk_tokens: [*]u16,
+    small_chunk_tokens: [*]u16,
+    page_chunk_tokens: [*]u16,
+    large_chunk_embeddings: [*]f32,
+    small_chunk_embeddings: [*]f32,
+    page_chunk_embeddings: [*]f32,
 
     fn ptr(comptime T: type, val: usize) T {
         return @as(T, @ptrFromInt(val));
     }
 
-    fn field_offsets(text_size: usize, pages: usize) [16]usize {
-        var offsets: [16]usize = undefined;
+    fn field_offsets(text_size: usize, pages: usize) [19]usize {
+        var offsets: [19]usize = undefined;
         var cum: usize = 0;
+
+        const max_large_chunks = number_of_groups(text_size, ChunkedWordPeiceEncoder.LARGE_CHUNK_SIZE);
+        const max_small_chunks = number_of_groups(text_size, ChunkedWordPeiceEncoder.SMALL_CHUNK_SIZE);
+        // TODO: This assumes that 1 page will never have more then InferenceEngine.MAX_TOKENS which is most likely not true in general
+        // we will need to add more chunks to this but its a lower bound
+        const max_page_chunks = pages;
 
         // size
         offsets[0] = 0;
@@ -462,42 +542,52 @@ const ChunkedEmbeddingRequestView = struct {
         offsets[6] = cum;
         cum += @sizeOf(usize);
 
-        // embeddings_count
+        // token_chunks_count
         offsets[7] = cum;
         cum += @sizeOf(usize);
 
-        // is_done_tokenizing
+        // embeddings_count
         offsets[8] = cum;
+        cum += @sizeOf(usize);
+
+        // is_done_tokenizing
+        offsets[9] = cum;
         cum += @sizeOf(bool);
 
         // text
-        offsets[9] = cum;
+        offsets[10] = cum;
         cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u8));
 
         // page offsets
-        offsets[10] = cum;
+        offsets[11] = cum;
         cum = std.mem.alignForward(usize, cum + @sizeOf(u64) * pages, @sizeOf(u64));
 
         // large chunk tokens
-        offsets[11] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
+        offsets[12] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size + 2 * max_large_chunks, @sizeOf(u16));
 
         // small chunk tokens
-        offsets[12] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
+        offsets[13] = cum;
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size + 2 * max_small_chunks, @sizeOf(u16));
 
         // page chunk tokens
-        offsets[13] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size, @sizeOf(u64));
-
-        // embeddings
         offsets[14] = cum;
-        // this is a very conservative estimate of embedding space
-        // TODO: improve this estimate once chunking strategies are implemented
-        cum = std.mem.alignForward(usize, cum + 768 * text_size * @sizeOf(f32), 8);
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size + 2 * max_page_chunks, @sizeOf(u16));
+
+        // large chunk embeddings
+        offsets[15] = cum;
+        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_large_chunks * @sizeOf(f32), 8);
+
+        // small chunk embeddings
+        offsets[16] = cum;
+        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_small_chunks * @sizeOf(f32), 8);
+
+        // page chunk embeddings
+        offsets[17] = cum;
+        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_page_chunks * @sizeOf(f32), 8);
 
         // total size
-        offsets[15] = cum;
+        offsets[18] = cum;
 
         return offsets;
     }
@@ -520,14 +610,17 @@ const ChunkedEmbeddingRequestView = struct {
             .large_tokens_count = ptr(*usize, base + offsets[4]),
             .small_tokens_count = ptr(*usize, base + offsets[5]),
             .page_tokens_count = ptr(*usize, base + offsets[6]),
-            .embeddings_count = ptr(*usize, base + offsets[7]),
-            .is_done_tokenizing = ptr(*bool, base + offsets[8]),
-            .text = ptr([*]u8, base + offsets[9]),
-            .page_offsets = ptr([*]u64, base + offsets[10]),
-            .large_chunk_tokens = ptr([*]u64, base + offsets[11]),
-            .small_chunk_tokens = ptr([*]u64, base + offsets[12]),
-            .page_chunk_tokens = ptr([*]u64, base + offsets[13]),
-            .embeddings = ptr([*]f32, base + offsets[14]),
+            .token_chunks_count = ptr(*usize, base + offsets[7]),
+            .embeddings_count = ptr(*usize, base + offsets[8]),
+            .is_done_tokenizing = ptr(*bool, base + offsets[9]),
+            .text = ptr([*]u8, base + offsets[10]),
+            .page_offsets = ptr([*]u64, base + offsets[11]),
+            .large_chunk_tokens = ptr([*]u16, base + offsets[12]),
+            .small_chunk_tokens = ptr([*]u16, base + offsets[13]),
+            .page_chunk_tokens = ptr([*]u16, base + offsets[14]),
+            .large_chunk_embeddings = ptr([*]f32, base + offsets[15]),
+            .small_chunk_embeddings = ptr([*]f32, base + offsets[16]),
+            .page_chunk_embeddings = ptr([*]f32, base + offsets[17]),
         };
     }
 
@@ -537,7 +630,7 @@ const ChunkedEmbeddingRequestView = struct {
 
     fn bytes(text_size: usize, pages: usize) usize {
         const offsets = ChunkedEmbeddingRequestView.field_offsets(text_size, pages);
-        return offsets[15];
+        return offsets[18];
     }
 
     fn init_data(base: usize, offset: usize, pipeline_v: *InferencePipeline, text: []const u8, pages: []const u64) void {
@@ -552,6 +645,7 @@ const ChunkedEmbeddingRequestView = struct {
         req.large_tokens_count.* = 0;
         req.small_tokens_count.* = 0;
         req.page_tokens_count.* = 0;
+        req.token_chunks_count.* = 0;
         req.embeddings_count.* = 0;
         req.offset.* = offset;
     }
@@ -610,10 +704,11 @@ pub const InferenceEngine = struct {
     const MAX_SEQUENCE_SIZE = 2048;
     const EMBEDDING_DIMENSION = 768;
     const MAX_BATCH_SIZE = 1;
-    const MAX_INPUT_ID_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u64);
+    const MAX_SKINNY_INPUT_ID_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u16);
+    const MAX_FAT_INPUT_ID_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u64);
     const MAX_ATTENTION_MASK_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * @sizeOf(u64);
     const MAX_TOKEN_EMBEDDING_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * EMBEDDING_DIMENSION * @sizeOf(f32);
-    const TENSOR_MEMORY_BYTES = MAX_ATTENTION_MASK_BYTES + GPU_MODELS * (MAX_INPUT_ID_BYTES + MAX_TOKEN_EMBEDDING_BYTES);
+    const TENSOR_MEMORY_BYTES = MAX_ATTENTION_MASK_BYTES + GPU_MODELS * (MAX_SKINNY_INPUT_ID_BYTES + MAX_FAT_INPUT_ID_BYTES + MAX_TOKEN_EMBEDDING_BYTES);
 
     shared_memory: SharedMemory,
     high_priority_pipeline: InferencePipeline,
@@ -651,8 +746,10 @@ pub const InferenceEngine = struct {
             self.gpu_devices[i].stream = CudaStream.init();
             self.gpu_devices[i].execution_context = TensorRTExecutionContext.init(&self.model);
             self.gpu_devices[i].attention_mask_tensor = gpu_memory;
-            self.gpu_devices[i].input_ids_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
-            offset += MAX_INPUT_ID_BYTES;
+            self.gpu_devices[i].skinny_input_ids_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            offset += MAX_SKINNY_INPUT_ID_BYTES;
+            self.gpu_devices[i].fat_input_ids_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
+            offset += MAX_FAT_INPUT_ID_BYTES;
             self.gpu_devices[i].token_embeddings_tensor = @ptrFromInt(@intFromPtr(gpu_memory) + offset);
             offset += MAX_TOKEN_EMBEDDING_BYTES;
             self.available_gpu_devices.push(@intCast(i)) catch unreachable;
@@ -874,4 +971,5 @@ pub const TensorRTExecutionContext = struct {
 };
 
 // custom kernels
-pub extern fn upcast_uint16_to_int64() void;
+pub extern fn upcast_uint16_to_int64(input: [*]const u16, output: [*]u64, size: usize, stream: CudaStreamHandle) void;
+pub extern fn average_token_embeddings(embeddings: [*]f32, batch: usize, size: usize, stream: CudaStreamHandle) void;

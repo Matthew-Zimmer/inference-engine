@@ -3,14 +3,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-__global__ void upcast_uint16_to_int64_kernel() {
+__global__ void upcast_uint16_to_int64_kernel(uint16_t const* __restrict__ input, uint64_t* __restrict__ output, uint64_t size) {
+	uint64_t slot = blockIdx.x * blockDim.x + threadIdx.x;
+	if (slot >= size) return;
 
+	output[slot] = static_cast<uint64_t>(input[slot]);
 }
 
-extern "C" void upcast_uint16_to_int64(cudaStream_t stream) {
-	upcast_uint16_to_int64_kernel<<<1, 1, 0, stream>>>();
+extern "C" void upcast_uint16_to_int64(uint16_t* __restrict__ input, uint64_t* __restrict__ output, uint64_t size, cudaStream_t stream) {
+	int threads_per_block = 128;
+	int blocks = (size + threads_per_block - 1) / threads_per_block;
+
+	upcast_uint16_to_int64_kernel<<<blocks, threads_per_block, 0, stream>>>(input, output, size);
 }
 
+__global__ void average_token_embeddings_kernel(float* embeddings, uint64_t size) {
+	uint64_t slot = (blockIdx.x * blockDim.x + threadIdx.x) * size;
+
+	for (uint64_t i = 1; i < size; ++i) {
+		embeddings[slot] += embeddings[slot + i];
+	}
+
+	embeddings[slot] /= size;
+}
+
+extern "C" void average_token_embeddings(float* __restrict__ embeddings, uint64_t batch, uint64_t size, cudaStream_t stream) {
+	average_token_embeddings_kernel<<<batch, 768, 0, stream>>>(embeddings, size);
+}
 
 class MyLogger : public nvinfer1::ILogger {
         void log(nvinfer1::ILogger::Severity severity, nvinfer1::AsciiChar const* msg) noexcept override {
