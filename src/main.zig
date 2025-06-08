@@ -29,6 +29,12 @@ pub fn main() !void {
     const addr = lib.map_and_lock_fd(memfd, SIZE);
     defer lib.unlock_and_unmap_fd(addr, SIZE);
 
+    var fixed_shared_memory_allocator = std.heap.FixedBufferAllocator.init(addr[@sizeOf(lib.InferenceEngine)..SIZE]);
+    var shared_memory_allocator = std.heap.GeneralPurposeAllocator(.{}){
+        .backing_allocator = fixed_shared_memory_allocator.allocator(),
+    };
+    defer _ = shared_memory_allocator.deinit();
+
     lib.cudaHostRegister(addr, SIZE, 0);
     defer lib.cudaHostUnregister(addr);
 
@@ -37,7 +43,7 @@ pub fn main() !void {
     try std.fmt.format(writer.writer(), "{}", .{memfd});
 
     const engine: *lib.InferenceEngine = @alignCast(@ptrCast(addr));
-    engine.* = try lib.InferenceEngine.init(SIZE);
+    engine.* = try lib.InferenceEngine.init(shared_memory_allocator.allocator());
     try engine.start(allocator);
     defer engine.deinit();
 
