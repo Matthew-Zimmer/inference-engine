@@ -20,6 +20,7 @@ class ChunkedEmbeddingResult:
 
 DIM = 768
 dummy_embedding = [0.0] * DIM
+LIB_ERROR = 0xffffffffffffffff
 
 class _ChunkedEmbeddingResult(ctypes.Structure):
     _fields_ = [
@@ -33,19 +34,19 @@ class _ChunkedEmbeddingResult(ctypes.Structure):
 
     # TODO: how perfomant is this?
     def to_python(self) -> ChunkedEmbeddingResult:
-        large_chunks_len = int(self.large_chunks_embeddings_len) // DIM 
+        large_chunks_len = int(self.large_chunk_embeddings_len) 
         large_chunks = [dummy_embedding] * large_chunks_len
         for i in range(large_chunks_len):
             for j in range(DIM):
                 large_chunks[i][j] = float(self.large_chunk_embeddings_data[i * DIM + j])
 
-        small_chunks_len = int(self.small_chunks_embeddings_len) // DIM 
+        small_chunks_len = int(self.small_chunk_embeddings_len)
         small_chunks = [dummy_embedding] * small_chunks_len
         for i in range(small_chunks_len):
             for j in range(DIM):
                 small_chunks[i][j] = float(self.small_chunk_embeddings_data[i * DIM + j])
 
-        page_chunks_len = int(self.page_chunks_embeddings_len) // DIM 
+        page_chunks_len = int(self.page_chunk_embeddings_len)
         page_chunks = [dummy_embedding] * page_chunks_len
         for i in range(page_chunks_len):
             for j in range(DIM):
@@ -87,7 +88,7 @@ async def _wait_for_fd_signal(fd: int):
         if not future.done():
             future.set_result(None)
         loop.remove_reader(fd)
-
+    
     loop.add_reader(fd, on_ready)
     return await future
 
@@ -119,6 +120,7 @@ class EngineRuntime:
         pages_array = pages_array_type(*pages)
         
         request = _lib.enqueue_high_priority_chunked_embedding_request(self.addr, c_text.value, ctypes.c_size_t(len(pages)), pages_array)
+        if int(request) == LIB_ERROR: raise RuntimeError()
 
         event_fd = int(_lib.chunked_request_event_fd(self.addr, request))
         await _wait_for_fd_signal(event_fd)
@@ -134,6 +136,7 @@ class EngineRuntime:
         pages_array = pages_array_type(*pages)
         
         request = _lib.enqueue_low_priority_chunked_embedding_request(self.addr, c_text.value, ctypes.c_size_t(len(pages)), pages_array)
+        if int(request) == LIB_ERROR: raise RuntimeError()
 
         event_fd = int(_lib.chunked_request_event_fd(self.addr, request))
         await _wait_for_fd_signal(event_fd)

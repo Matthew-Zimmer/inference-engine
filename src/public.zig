@@ -2,11 +2,11 @@ const std = @import("std");
 const lib = @import("lib");
 
 pub export fn enqueue_high_priority_chunked_embedding_request(eng: *lib.InferenceEngine, text: [*:0]const u8, pages: usize, page_offsets: [*]u64) usize {
-    return eng.enqueue_high_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch 0;
+    return eng.enqueue_high_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch std.math.maxInt(usize);
 }
 
 pub export fn enqueue_low_priority_chunked_embedding_request(eng: *lib.InferenceEngine, text: [*:0]const u8, pages: usize, page_offsets: [*]u64) usize {
-    return eng.enqueue_low_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch 0;
+    return eng.enqueue_low_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch std.math.maxInt(usize);
 }
 
 pub export fn load_shared_memory_from_fd(fd: i32, size: usize) [*]u8 {
@@ -28,7 +28,7 @@ pub export fn event_fds(eng: *lib.InferenceEngine) EventFdsInfo {
 }
 
 pub export fn chunked_request_event_fd(eng: *lib.InferenceEngine, offset: usize) i32 {
-    const req = lib.ChunkedEmbeddingRequestView.view(@intFromPtr(eng) + offset);
+    const req = lib.ChunkedEmbeddingRequestView.view(eng.start_shared_memory_region() + offset);
 
     return req.event_fd.*;
 }
@@ -43,7 +43,7 @@ const ChunkedEmbeddingResult = extern struct {
 };
 
 pub export fn chunked_request_result(eng: *lib.InferenceEngine, offset: usize) ChunkedEmbeddingResult {
-    const req = lib.ChunkedEmbeddingRequestView.view(@intFromPtr(eng) + offset);
+    const req = lib.ChunkedEmbeddingRequestView.view(eng.start_shared_memory_region() + offset);
 
     return .{
         .large_chunk_embeddings_len = req.large_chunks_count.*,
@@ -56,6 +56,5 @@ pub export fn chunked_request_result(eng: *lib.InferenceEngine, offset: usize) C
 }
 
 pub export fn chunked_request_deinit(eng: *lib.InferenceEngine, offset: usize) void {
-    const req = lib.ChunkedEmbeddingRequestView.view(@intFromPtr(eng) + offset);
-    eng.shared_memory_allocator.free(req.raw());
+    eng.shared_memory_allocator.free(offset);
 }

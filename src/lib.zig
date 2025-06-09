@@ -9,6 +9,97 @@ const UNK: u16 = 100;
 const CLS: u16 = 101;
 const SEP: u16 = 102;
 
+pub const SharedMemoryAllocator = struct {
+    const MAX_ALLOCATIONS = 1000;
+
+    const FreeListItem = struct {
+        offset: usize,
+        size: usize,
+        in_use: bool,
+    };
+
+    memory_head: usize,
+    memory_tail: usize,
+    memory_size: usize,
+    allocations_head: usize,
+    allocations_tail: usize,
+    allocations: [MAX_ALLOCATIONS]FreeListItem = undefined,
+
+    pub fn init(size: usize) SharedMemoryAllocator {
+        return .{
+            .memory_head = 0,
+            .memory_tail = 0,
+            .memory_size = size,
+            .allocations_head = 0,
+            .allocations_tail = 0,
+        };
+    }
+
+    fn next(idx: usize) usize {
+        return (idx + 1) % MAX_ALLOCATIONS;
+    }
+
+    fn allocate(self: *SharedMemoryAllocator, size: usize, next_tail: usize) usize {
+        const offset = self.memory_tail;
+        self.allocations[self.allocations_tail] = .{ .offset = self.memory_tail, .size = size, .in_use = true };
+        self.allocations_tail = next_tail;
+        self.memory_tail += size;
+        return offset;
+    }
+
+    pub fn alloc(self: *SharedMemoryAllocator, size: usize) !usize {
+        const next_tail = next(self.allocations_tail);
+        if (self.allocations_head == next_tail) return error.no_more_allocations_allowed;
+
+        if (self.memory_tail >= self.memory_head) {
+            if (self.memory_size - self.memory_tail >= size) {
+                return self.allocate(size, next_tail);
+            }
+
+            if (self.memory_head >= size) {
+                self.memory_tail = 0;
+                return self.allocate(size, next_tail);
+            }
+        } else {
+            if (self.memory_head - self.memory_tail >= size) {
+                return self.allocate(size, next_tail);
+            }
+        }
+
+        return error.not_enough_shared_memory;
+    }
+
+    fn free_allocation(self: *SharedMemoryAllocator, size: usize) void {
+        self.allocations_head = next(self.allocations_head);
+        if (self.memory_head + size <= self.memory_size) {
+            self.memory_head += size;
+        } else {
+            self.memory_head = size;
+        }
+    }
+
+    pub fn free(self: *SharedMemoryAllocator, offset: usize) void {
+        var all_prior_freed: bool = true;
+
+        var i = self.allocations_head;
+        while (i != self.allocations_tail) {
+            const item = &self.allocations[i];
+            if (item.*.offset == offset) {
+                item.*.in_use = false;
+                if (all_prior_freed) {
+                    self.free_allocation(item.*.size);
+                }
+                break;
+            } else if (item.*.in_use) {
+                all_prior_freed = false;
+            } else {
+                self.free_allocation(item.*.size);
+            }
+            i = next(i);
+        }
+    }
+};
+
 const TrieNode = struct {
     id: u16,
     size: u8,
@@ -217,7 +308,7 @@ const ChunkedWordPeiceEncoder = struct {
     }
 
     pub fn encode(self: *ChunkedWordPeiceEncoder) void {
-        std.debug.print("Generating token ids for '{s}'\n", .{self.req.text[0..self.req.size.*]});
+        // std.debug.print("Generating token ids for '{s}'\n", .{self.req.text[0..self.req.size.*]});
         const size = self.req.size.*;
 
         while (self.index < size) {
@@ -413,11 +504,16 @@ const EmbeddingQueueItem = struct {
 };
 const EmbeddingQueue = RingQueue(EmbeddingQueueItem, 1024);
 const NotifyQueue = RingQueue(usize, 128);
+const EmbeddingCallbackData = struct {
+    request_offset: usize,
+    device_idx: u8,
+};
 
 const InferencePipeline = struct {
     tokenization_queue: TokenizationQueue,
     embedding_queue: EmbeddingQueue,
     notify_queue: NotifyQueue,
+    active_requests: [InferenceEngine.GPU_MODELS]EmbeddingCallbackData = undefined,
 
     pub fn init() InferencePipeline {
         return .{
@@ -438,9 +534,10 @@ const InferencePipeline = struct {
         };
     }
 
-    pub fn embed(self: *InferencePipeline, base: usize, device: *GpuDevice) !void {
+    pub fn embed(self: *InferencePipeline, base: usize, device: *GpuDevice, idx: u8) !void {
         const item = try self.embedding_queue.pop();
         const ptr = base + item.offset;
+        self.active_requests[idx] = .{ .request_offset = ptr, .device_idx = idx };
 
         cudaMemcpyAsync(device.skinny_input_ids_tensor, item.tokens, item.batch * item.size * @sizeOf(u64), .h2d, device.stream.handle);
         upcast_uint16_to_int64(@alignCast(@ptrCast(device.skinny_input_ids_tensor)), @alignCast(@ptrCast(device.fat_input_ids_tensor)), item.batch * item.size, device.stream.handle);
@@ -451,13 +548,18 @@ const InferencePipeline = struct {
         device.execution_context.enqueue(device.stream);
         average_token_embeddings(@alignCast(@ptrCast(device.token_embeddings_tensor)), item.batch, item.size, device.stream.handle);
         cudaMemcpyAsync(item.embeddings, device.token_embeddings_tensor, item.batch * 768 * @sizeOf(f32), .d2h, device.stream.handle);
-        _ = cudaLaunchHostFunc(device.stream.handle, cuda_embedding_callback, @ptrFromInt(ptr));
+        _ = cudaLaunchHostFunc(device.stream.handle, cuda_embedding_callback, &self.active_requests[idx]);
     }
 
     pub fn notify(self: *InferencePipeline, base: usize, eng: *InferenceEngine) !void {
         const item = try self.notify_queue.pop();
         const ptr = base + item;
         const req = ChunkedEmbeddingRequestView.view(ptr);
+
+        var file = try std.fs.cwd().createFile("request_data.bin", .{});
+        defer file.close();
+
+        _ = try file.write(req.raw());
 
         const val: u64 = 1;
         _ = std.os.linux.write(req.event_fd.*, @ptrCast(&val), @sizeOf(u64));
@@ -471,11 +573,17 @@ fn wordpeice_encode(req: ChunkedEmbeddingRequestView) void {
 }
 
 export fn cuda_embedding_callback(data: ?*anyopaque) callconv(.C) void {
-    const req = ChunkedEmbeddingRequestView.view(@intFromPtr(data));
+    const active_request: *EmbeddingCallbackData = @alignCast(@ptrCast(data));
+    const req = ChunkedEmbeddingRequestView.view(active_request.request_offset);
+    defer req.engine().available_gpu_devices.push(active_request.device_idx) catch unreachable;
+
     req.embeddings_count.* += 1;
-    if (req.is_done_tokenizing.* and (req.large_chunks_count.* + req.small_chunks_count.* + req.page_chunks_count.*) == req.embeddings_count.*) {
-        req.pipeline().notify_queue.push(req.offset.*) catch {
+    const token_chunks_count = req.large_chunks_count.* + req.small_chunks_count.* + req.page_chunks_count.*;
+
+    if (req.is_done_tokenizing.* and token_chunks_count == req.embeddings_count.*) {
+        req.pipeline().notify_queue.push(req.offset.*) catch |e| {
             // TODO: WTF to do here?
+            std.debug.print("notify queue push err: {}\n", .{e});
         };
     }
 }
@@ -578,11 +686,11 @@ pub const ChunkedEmbeddingRequestView = struct {
 
         // text
         offsets[13] = cum;
-        cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u8));
+        cum = std.mem.alignForward(usize, cum + text_size, @sizeOf(u64));
 
         // page offsets
         offsets[14] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u64) * pages, @sizeOf(u64));
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u64) * pages, @sizeOf(u16));
 
         // large chunk tokens
         offsets[15] = cum;
@@ -594,15 +702,15 @@ pub const ChunkedEmbeddingRequestView = struct {
 
         // page chunk tokens
         offsets[17] = cum;
-        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size + 2 * max_page_chunks, @sizeOf(u16));
+        cum = std.mem.alignForward(usize, cum + @sizeOf(u16) * text_size + 2 * max_page_chunks, @sizeOf(f32));
 
         // large chunk embeddings
         offsets[18] = cum;
-        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_large_chunks * @sizeOf(f32), 8);
+        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_large_chunks * @sizeOf(f32), @sizeOf(f32));
 
         // small chunk embeddings
         offsets[19] = cum;
-        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_small_chunks * @sizeOf(f32), 8);
+        cum = std.mem.alignForward(usize, cum + MODEL_DIM * max_small_chunks * @sizeOf(f32), @sizeOf(f32));
 
         // page chunk embeddings
         offsets[20] = cum;
@@ -653,6 +761,10 @@ pub const ChunkedEmbeddingRequestView = struct {
         return @ptrFromInt(@intFromPtr(self.size) - self.pipeline_offset.*);
     }
 
+    pub fn engine(self: *const ChunkedEmbeddingRequestView) *InferenceEngine {
+        return @ptrFromInt(@intFromPtr(self.size) - self.offset.* - @sizeOf(InferenceEngine));
+    }
+
     fn bytes(text_size: usize, pages: usize) usize {
         const offsets = ChunkedEmbeddingRequestView.field_offsets(text_size, pages);
         return offsets[21];
@@ -685,7 +797,7 @@ pub const ChunkedEmbeddingRequestView = struct {
 
 pub const InferenceEngine = struct {
     pub const MAX_CONCURRENT_REQUESTS = 128;
-    pub const GPU_MODELS = 1;
+    pub const GPU_MODELS = 5;
     pub const MAX_SEQUENCE_SIZE = 2048;
     pub const EMBEDDING_DIMENSION = 768;
     pub const MAX_BATCH_SIZE = 1;
@@ -696,7 +808,7 @@ pub const InferenceEngine = struct {
     const MAX_TOKEN_EMBEDDING_BYTES = MAX_BATCH_SIZE * MAX_SEQUENCE_SIZE * EMBEDDING_DIMENSION * @sizeOf(f32);
     const TENSOR_MEMORY_BYTES = MAX_ATTENTION_MASK_BYTES + GPU_MODELS * (MAX_SKINNY_INPUT_ID_BYTES + MAX_FAT_INPUT_ID_BYTES + MAX_TOKEN_EMBEDDING_BYTES);
 
-    shared_memory_allocator: std.mem.Allocator,
+    shared_memory_allocator: SharedMemoryAllocator,
     high_priority_pipeline: InferencePipeline,
     low_priority_pipeline: InferencePipeline,
     i: usize,
@@ -713,11 +825,11 @@ pub const InferenceEngine = struct {
     // notification resources
     events: RingQueue(i32, MAX_CONCURRENT_REQUESTS),
 
-    pub fn init(shared_memory_allocator: std.mem.Allocator) !InferenceEngine {
+    pub fn init(size: usize) !InferenceEngine {
         return .{
             .high_priority_pipeline = InferencePipeline.init(),
             .low_priority_pipeline = InferencePipeline.init(),
-            .shared_memory_allocator = shared_memory_allocator,
+            .shared_memory_allocator = SharedMemoryAllocator.init(size),
             .i = 0,
             .available_gpu_devices = RingQueue(u8, GPU_MODELS).init(),
             .events = RingQueue(i32, MAX_CONCURRENT_REQUESTS).init(),
@@ -778,8 +890,8 @@ pub const InferenceEngine = struct {
             if (gpu_device_idx != null) {
                 const idx = gpu_device_idx orelse unreachable;
                 const gpu_device = &self.gpu_devices[idx];
-                self.high_priority_pipeline.embed(base, gpu_device) catch {
-                    self.low_priority_pipeline.embed(base, gpu_device) catch {
+                self.high_priority_pipeline.embed(base, gpu_device, idx) catch {
+                    self.low_priority_pipeline.embed(base, gpu_device, idx) catch {
                         break;
                     };
                 };
@@ -793,17 +905,22 @@ pub const InferenceEngine = struct {
         };
     }
 
-    fn start_shared_memory_region(self: *InferenceEngine) usize {
+    pub fn start_shared_memory_region(self: *InferenceEngine) usize {
         return @intFromPtr(self) + @sizeOf(InferenceEngine);
     }
 
     fn enqueue_chunked_embedding_request(self: *InferenceEngine, pipeline: *InferencePipeline, text: []const u8, pages: []const u64) !usize {
-        const event = try self.events.pop();
+        const event = self.events.peek() orelse return error.no_event_fds_available;
+        defer self.events.discard() catch unreachable;
+
         const size = ChunkedEmbeddingRequestView.bytes(text.len, pages.len);
-        const memory = try self.shared_memory_allocator.alloc(u8, size);
-        const offset = @intFromPtr(&memory[0]) - @intFromPtr(self);
+
+        const offset = try self.shared_memory_allocator.alloc(size);
+        errdefer self.shared_memory_allocator.free(offset);
+
         ChunkedEmbeddingRequestView.init_data(self.start_shared_memory_region(), offset, pipeline, event, text, pages);
         try pipeline.enqueue(offset);
+
         return offset;
     }
 

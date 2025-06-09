@@ -33,7 +33,7 @@ extern "C" void average_token_embeddings(float* __restrict__ embeddings, uint64_
 
 class MyLogger : public nvinfer1::ILogger {
         void log(nvinfer1::ILogger::Severity severity, nvinfer1::AsciiChar const* msg) noexcept override {
-		printf("%s\n", msg);
+		// printf("%s\n", msg);
 	}
 } logger;
 
@@ -70,9 +70,7 @@ extern "C" void destroy_runtime(nvinfer1::IRuntime* rt) {
 
 extern "C" nvinfer1::ICudaEngine* create_engine(nvinfer1::IRuntime* rt, char* path) {
 	EngineInfo info = read_engine_file(path);
-	printf("read engine info\n");
 	nvinfer1::ICudaEngine* eng = rt->deserializeCudaEngine(info.data, info.size);
-	printf("made engine\n");
 	free(info.data);
 	return eng;
 }

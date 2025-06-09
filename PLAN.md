@@ -79,4 +79,5 @@ I am building an application which can serve low and high priority embedding tas
 73. [x] write a public zig function to inspect a chunked request event fds
 74. [x] write a public zig function to inspect all event fds
 75. [x] write a public zig function to inspect the chunked request result
+76. [x] write a multi process out of order shared memory allocator
 

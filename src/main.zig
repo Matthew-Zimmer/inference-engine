@@ -29,12 +29,6 @@ pub fn main() !void {
     const addr = lib.map_and_lock_fd(memfd, SIZE);
     defer lib.unlock_and_unmap_fd(addr, SIZE);
 
-    var fixed_shared_memory_allocator = std.heap.FixedBufferAllocator.init(addr[@sizeOf(lib.InferenceEngine)..SIZE]);
-    var shared_memory_allocator = std.heap.GeneralPurposeAllocator(.{}){
-        .backing_allocator = fixed_shared_memory_allocator.allocator(),
-    };
-    defer _ = shared_memory_allocator.deinit();
-
     lib.cudaHostRegister(addr, SIZE, 0);
     defer lib.cudaHostUnregister(addr);
 
@@ -43,7 +37,7 @@ pub fn main() !void {
     try std.fmt.format(writer.writer(), "{}", .{memfd});
 
     const engine: *lib.InferenceEngine = @alignCast(@ptrCast(addr));
-    engine.* = try lib.InferenceEngine.init(shared_memory_allocator.allocator());
+    engine.* = try lib.InferenceEngine.init(SIZE - @sizeOf(lib.InferenceEngine));
     try engine.start(allocator);
     defer engine.deinit();
 
@@ -56,8 +50,9 @@ pub fn main() !void {
         return error.os_execve_error;
     } else if (high_priority_pid > 0) {
         // parent
-        var status: u32 = undefined;
-        _ = std.os.linux.waitpid(high_priority_pid, &status, 0);
+        // NO WAITING
+        // var status: u32 = undefined;
+        // _ = std.os.linux.waitpid(high_priority_pid, &status, 0);
     } else {
         return error.os_fork_error;
     }
@@ -70,8 +65,9 @@ pub fn main() !void {
         return error.os_execve_error;
     } else if (low_priority_pid > 0) {
         // parent
-        var status: u32 = undefined;
-        _ = std.os.linux.waitpid(low_priority_pid, &status, 0);
+        // NO WAITING
+        // var status: u32 = undefined;
+        // _ = std.os.linux.waitpid(low_priority_pid, &status, 0);
     } else {
         return error.os_fork_error;
     }

@@ -5,6 +5,7 @@ fd = int(sys.argv[1])
 size = int(sys.argv[2])
 
 async def main():
+    return
     with EngineRuntime(fd, size) as rt:
         text = "embedding request from low script" 
         pages = [len(text)]
