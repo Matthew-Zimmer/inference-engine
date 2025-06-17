@@ -41,10 +41,13 @@ pub fn main() !void {
     try engine.start(allocator);
     defer engine.deinit();
 
+    const argv = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, argv);
+
     const high_priority_pid: std.os.linux.pid_t = @intCast(std.os.linux.fork());
     if (high_priority_pid == 0) {
         _ = lib.map_and_lock_fd(memfd, SIZE);
-        const args: [6:null]?[*:0]const u8 = .{ "/home/matthew/inference-engine-2/.venv/bin/python", "-m", "high", @ptrCast(&writer.buffer), "32000000", null };
+        const args: [7:null]?[*:0]const u8 = .{ "/home/matthew/inference-engine-2/.venv/bin/python", "-m", "high", @ptrCast(&writer.buffer), "32000000", argv[1], null };
         const env: [1:null]?[*:0]const u8 = .{null};
         _ = std.os.linux.execve(args[0].?, &args, &env);
         return error.os_execve_error;

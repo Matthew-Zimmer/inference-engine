@@ -84,7 +84,7 @@ def flatten(d: dict[Any, Any]) -> list[TrieNode]:
 flat_trie = flatten(prefix_dict)
 print(len(flat_trie))
 
-UNK = 101
+UNK = 100
 
 def _trie_node_binary_blob(node: TrieNode, lookup: dict[int, int]) -> bytes:
     n = len(node.values)

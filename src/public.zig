@@ -2,7 +2,10 @@ const std = @import("std");
 const lib = @import("lib");
 
 pub export fn enqueue_high_priority_chunked_embedding_request(eng: *lib.InferenceEngine, text: [*:0]const u8, pages: usize, page_offsets: [*]u64) usize {
-    return eng.enqueue_high_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch std.math.maxInt(usize);
+    return eng.enqueue_high_priority_chunked_embedding_request(std.mem.span(text), page_offsets[0..pages]) catch |e| {
+        std.debug.print("ERROR: {}\n", .{e});
+        return std.math.maxInt(usize);
+    };
 }
 
 pub export fn enqueue_low_priority_chunked_embedding_request(eng: *lib.InferenceEngine, text: [*:0]const u8, pages: usize, page_offsets: [*]u64) usize {

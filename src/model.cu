@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+constexpr uint64_t embedding_dim = 768;
+
 __global__ void upcast_uint16_to_int64_kernel(uint16_t const* __restrict__ input, uint64_t* __restrict__ output, uint64_t size) {
 	uint64_t slot = blockIdx.x * blockDim.x + threadIdx.x;
 	if (slot >= size) return;
@@ -10,25 +12,27 @@ __global__ void upcast_uint16_to_int64_kernel(uint16_t const* __restrict__ input
 	output[slot] = static_cast<uint64_t>(input[slot]);
 }
 
-extern "C" void upcast_uint16_to_int64(uint16_t* __restrict__ input, uint64_t* __restrict__ output, uint64_t size, cudaStream_t stream) {
+extern "C" void upcast_uint16_to_int64(uint16_t const* __restrict__ input, uint64_t* __restrict__ output, uint64_t size, cudaStream_t stream) {
 	int threads_per_block = 128;
 	int blocks = (size + threads_per_block - 1) / threads_per_block;
 
 	upcast_uint16_to_int64_kernel<<<blocks, threads_per_block, 0, stream>>>(input, output, size);
 }
 
-__global__ void average_token_embeddings_kernel(float* embeddings, uint64_t size) {
-	uint64_t slot = (blockIdx.x * blockDim.x + threadIdx.x) * size;
+__global__ void average_token_embeddings_kernel(float const* __restrict__ input, float* __restrict__ output, uint64_t size) {
+	uint64_t in_slot = blockIdx.x * size * embedding_dim + threadIdx.x ;
+	uint64_t out_slot = threadIdx.x;
 
-	for (uint64_t i = 1; i < size; ++i) {
-		embeddings[slot] += embeddings[slot + i];
+	for (uint64_t i = 0; i < size; ++i) {
+		output[out_slot] += input[in_slot];
+		in_slot += embedding_dim;
 	}
 
-	embeddings[slot] /= size;
+	output[out_slot] /= static_cast<float>(size);
 }
 
-extern "C" void average_token_embeddings(float* __restrict__ embeddings, uint64_t batch, uint64_t size, cudaStream_t stream) {
-	average_token_embeddings_kernel<<<batch, 768, 0, stream>>>(embeddings, size);
+extern "C" void average_token_embeddings(float const* __restrict__ input, float* __restrict__ output, uint64_t batch, uint64_t size, cudaStream_t stream) {
+	average_token_embeddings_kernel<<<batch, embedding_dim, 0, stream>>>(input, output, size);
 }
 
 class MyLogger : public nvinfer1::ILogger {

@@ -86,6 +86,7 @@ async def _wait_for_fd_signal(fd: int):
 
     def on_ready():
         if not future.done():
+            os.read(fd, 8)
             future.set_result(None)
         loop.remove_reader(fd)
     
