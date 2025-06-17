@@ -70,7 +70,7 @@ I am building an application which can serve low and high priority embedding tas
 64. [x] need to pool of event file descriptors
 65. [x] after request is done need to deinit the memory
 66. [ ] implement the high priority http web server
-67. [ ] benchmark the inference engine
+67. [x] benchmark the inference engine
 68. [x] need an averager cuda kernel on the gpu side to average all embeddings
 69. [x] allocate space on gpu for u16 and u64 for tokens
 70. [x] invoke the u16 -> u64 upcast kernel before sending to model
@@ -80,4 +80,5 @@ I am building an application which can serve low and high priority embedding tas
 74. [x] write a public zig function to inspect all event fds
 75. [x] write a public zig function to inspect the chunked request result
 76. [x] write a multi process out of order shared memory allocator
+77. [x] validate model results
 
